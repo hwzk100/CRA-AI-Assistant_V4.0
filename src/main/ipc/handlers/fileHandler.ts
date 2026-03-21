@@ -5,7 +5,8 @@
 import { ipcMain, dialog } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs/promises';
-import type { StorageZone, FileInfo, FileStatus, FileType, Result } from '@shared/types';
+import type { FileInfo, FileStatus, FileType, Result } from '@shared/types';
+import { StorageZone } from '@shared/types';
 import { ok, err } from '@shared/types/core';
 import { ErrorCode, createAppError } from '@shared/types/core';
 import { getFileExtension, getFileTypeFromExtension } from '@shared/types/core';

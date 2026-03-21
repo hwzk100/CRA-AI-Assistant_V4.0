@@ -260,6 +260,15 @@ export const WORKSHEET_METADATA: Record<WorksheetType, WorksheetMetadata> = {
     lastModified: new Date(),
     isEmpty: true,
   },
+  subjectDemographics: {
+    type: 'subjectDemographics',
+    title: '受试者信息',
+    description: '受试者人口统计学信息',
+    icon: '👥',
+    rowCount: 0,
+    lastModified: new Date(),
+    isEmpty: true,
+  },
 };
 
 // ============================================================================

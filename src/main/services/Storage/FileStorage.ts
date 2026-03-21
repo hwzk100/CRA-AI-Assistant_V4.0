@@ -5,7 +5,9 @@
 
 import * as path from 'path';
 import * as fs from 'fs/promises';
-import type { FileInfo, StorageZone, Result, IStorageService } from './index';
+import type { FileInfo, Result } from '@shared/types';
+import { StorageZone } from '@shared/types';
+import type { IStorageService } from './index';
 import { ok, err } from '@shared/types/core';
 import { ErrorCode, createAppError } from '@shared/types/core';
 import { STORAGE_DIR_NAME, PROTOCOL_DIR_NAME, SUBJECT_DIR_NAME } from '@shared/constants';

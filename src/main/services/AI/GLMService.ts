@@ -237,21 +237,52 @@ export class GLMService implements IAIService {
    */
   async extractSubjectNumber(fileId: string, content: string): Promise<Result<ExtractSubjectDataResult>> {
     try {
+      console.log('[GLMService] Input content length:', content.length);
+      console.log('[GLMService] Input content preview:', content.substring(0, 1000));
       const truncatedContent = PromptEngine.truncateContent(content, 4000);
+      console.log('[GLMService] Truncated content length:', truncatedContent.length);
+      console.log('[GLMService] Truncated content preview:', truncatedContent.substring(0, 1000));
       const messages = PromptEngine.generateSubjectDataPrompt(truncatedContent);
+      console.log('[GLMService] System message:', messages[0].content.substring(0, 500));
+      console.log('[GLMService] User message length:', messages[1].content.length);
+      console.log('[GLMService] User message preview:', messages[1].content.substring(0, 500));
+
+      // Write debug file
+      try {
+        const fs = await import('fs/promises');
+        const path = await import('path');
+        const debugDir = path.join(process.env.USERPROFILE || process.env.HOME || '.', '.claude', 'debug');
+        await fs.mkdir(debugDir, { recursive: true });
+        const promptContent = `=== SYSTEM PROMPT ===\n${messages[0].content}\n\n=== USER PROMPT ===\n${messages[1].content}`;
+        await fs.writeFile(
+          path.join(debugDir, 'ai-prompt-debug.txt'),
+          promptContent
+        );
+        console.log('[GLMService] Debug prompt file written to:', path.join(debugDir, 'ai-prompt-debug.txt'));
+        console.log('[GLMService] User message content length:', messages[1].content.length);
+        console.log('[GLMService] User message actual content:', messages[1].content.substring(0, 2000));
+      } catch (e) {
+        console.error('[GLMService] Failed to write debug file:', e);
+      }
+
       const result = await this.callAPI(messages);
 
       if (!result.success) {
+        console.error('[GLMService] API call failed:', result.error);
         return result;
       }
 
+      console.log('[GLMService] AI raw response:', result.data);
       const parseResult = PromptEngine.parseJSONResponse<ExtractSubjectDataResult>(result.data);
       if (!parseResult.success) {
+        console.error('[GLMService] JSON parse failed:', parseResult.error);
         return parseResult;
       }
 
+      console.log('[GLMService] Parsed subject data:', parseResult.data);
       return ok(parseResult.data);
     } catch (error) {
+      console.error('[GLMService] Exception:', error);
       return err(createAppError(
         ErrorCode.AI_API_ERROR,
         `提取受试者编号失败: ${error instanceof Error ? error.message : 'Unknown error'}`
@@ -368,6 +399,44 @@ export class GLMService implements IAIService {
       return err(createAppError(
         ErrorCode.AI_API_ERROR,
         `图片识别失败: ${error instanceof Error ? error.message : 'Unknown error'}`
+      ));
+    }
+  }
+
+  /**
+   * Analyze subject eligibility against criteria
+   */
+  async analyzeEligibility(
+    subjectData: string,
+    inclusionCriteria: any[],
+    exclusionCriteria: any[]
+  ): Promise<Result<{
+    inclusion: Array<{ id: string; eligible: boolean; reason: string }>;
+    exclusion: Array<{ id: string; eligible: boolean; reason: string }>;
+  }>> {
+    try {
+      const truncatedData = PromptEngine.truncateContent(subjectData, 6000);
+      const messages = PromptEngine.generateEligibilityPrompt(truncatedData, inclusionCriteria, exclusionCriteria);
+      const result = await this.callAPI(messages);
+
+      if (!result.success) {
+        return result;
+      }
+
+      const parseResult = PromptEngine.parseJSONResponse<{
+        inclusion: Array<{ id: string; eligible: boolean; reason: string }>;
+        exclusion: Array<{ id: string; eligible: boolean; reason: string }>;
+      }>(result.data);
+
+      if (!parseResult.success) {
+        return parseResult;
+      }
+
+      return ok(parseResult.data);
+    } catch (error) {
+      return err(createAppError(
+        ErrorCode.AI_API_ERROR,
+        `分析受试者资格失败: ${error instanceof Error ? error.message : 'Unknown error'}`
       ));
     }
   }

@@ -49,7 +49,7 @@ export const Sidebar: React.FC = () => {
       {/* Footer */}
       <div className="p-3 border-t border-gray-200">
         <div className="text-xs text-gray-500 text-center">
-          CRA AI Assistant v1.0.0
+          CRA AI Assistant v4.0
         </div>
       </div>
     </aside>

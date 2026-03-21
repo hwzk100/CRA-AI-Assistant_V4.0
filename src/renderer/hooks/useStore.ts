@@ -13,9 +13,10 @@ import type {
   SubjectVisitData,
   MedicationRecord,
   WorksheetType,
-  StorageZone,
   FileStatus,
+  SubjectDemographics,
 } from '@shared/types';
+import { StorageZone } from '@shared/types';
 import { DEFAULT_SETTINGS, WORKSHEET_CONFIG } from '@shared/constants';
 import { generateId, cloneItem } from '@shared/types/worksheet';
 
@@ -35,6 +36,7 @@ interface AppState {
   visitSchedule: VisitSchedule[];
   subjectVisits: SubjectVisitData[];
   medications: MedicationRecord[];
+  subjectDemographics: SubjectDemographics[];
 
   // UI State
   activeWorksheet: WorksheetType;
@@ -63,11 +65,13 @@ interface AppActions {
   addInclusionCriteria: (criteria: InclusionCriteria) => void;
   updateInclusionCriteria: (id: string, updates: Partial<InclusionCriteria>) => void;
   removeInclusionCriteria: (id: string) => void;
+  updateInclusionEligibility: (id: string, eligible: boolean, reason: string) => void;
 
   setExclusionCriteria: (criteria: ExclusionCriteria[]) => void;
   addExclusionCriteria: (criteria: ExclusionCriteria) => void;
   updateExclusionCriteria: (id: string, updates: Partial<ExclusionCriteria>) => void;
   removeExclusionCriteria: (id: string) => void;
+  updateExclusionEligibility: (id: string, eligible: boolean, reason: string) => void;
 
   setVisitSchedule: (schedule: VisitSchedule[]) => void;
   addVisitSchedule: (schedule: VisitSchedule) => void;
@@ -83,6 +87,10 @@ interface AppActions {
   addMedication: (medication: MedicationRecord) => void;
   updateMedication: (id: string, updates: Partial<MedicationRecord>) => void;
   removeMedication: (id: string) => void;
+
+  // Demographics Actions
+  setSubjectDemographics: (demographics: SubjectDemographics[]) => void;
+  addSubjectDemographics: (demographics: SubjectDemographics) => void;
 
   // Processing Actions
   setProcessing: (isProcessing: boolean, stage?: string, progress?: number) => void;
@@ -119,6 +127,7 @@ const useAppStore = create<AppStore>()(
       visitSchedule: [],
       subjectVisits: [],
       medications: [],
+      subjectDemographics: [],
 
       activeWorksheet: 'inclusionCriteria',
       isProcessing: false,
@@ -193,6 +202,13 @@ const useAppStore = create<AppStore>()(
           inclusionCriteria: state.inclusionCriteria.filter((c) => c.id !== id),
         })),
 
+      updateInclusionEligibility: (id, eligible, reason) =>
+        set((state) => ({
+          inclusionCriteria: state.inclusionCriteria.map((c) =>
+            c.id === id ? { ...c, eligible, reason, updatedAt: new Date() } : c
+          ),
+        })),
+
       setExclusionCriteria: (criteria) => set({ exclusionCriteria: criteria }),
 
       addExclusionCriteria: (criteria) =>
@@ -210,6 +226,13 @@ const useAppStore = create<AppStore>()(
       removeExclusionCriteria: (id) =>
         set((state) => ({
           exclusionCriteria: state.exclusionCriteria.filter((c) => c.id !== id),
+        })),
+
+      updateExclusionEligibility: (id, eligible, reason) =>
+        set((state) => ({
+          exclusionCriteria: state.exclusionCriteria.map((c) =>
+            c.id === id ? { ...c, eligible, reason, updatedAt: new Date() } : c
+          ),
         })),
 
       setVisitSchedule: (schedule) => set({ visitSchedule: schedule }),
@@ -269,6 +292,14 @@ const useAppStore = create<AppStore>()(
           medications: state.medications.filter((m) => m.id !== id),
         })),
 
+      // Demographics Actions
+      setSubjectDemographics: (demographics) => set({ subjectDemographics: demographics }),
+
+      addSubjectDemographics: (demographics) =>
+        set((state) => ({
+          subjectDemographics: [...state.subjectDemographics, demographics],
+        })),
+
       // Processing Actions
       setProcessing: (isProcessing, stage = 'idle', progress = 0) =>
         set({
@@ -304,6 +335,8 @@ const useAppStore = create<AppStore>()(
               return { subjectVisits: [] };
             case 'medications':
               return { medications: [] };
+            case 'subjectDemographics':
+              return { subjectDemographics: [] };
           }
         }),
 
@@ -314,6 +347,7 @@ const useAppStore = create<AppStore>()(
           visitSchedule: [],
           subjectVisits: [],
           medications: [],
+          subjectDemographics: [],
         }),
     }),
     {
@@ -325,6 +359,7 @@ const useAppStore = create<AppStore>()(
         visitSchedule: state.visitSchedule,
         subjectVisits: state.subjectVisits,
         medications: state.medications,
+        subjectDemographics: state.subjectDemographics,
       }),
     }
   )
@@ -348,3 +383,4 @@ export const useExclusionCriteria = () => useAppStore((state) => state.exclusion
 export const useVisitSchedule = () => useAppStore((state) => state.visitSchedule);
 export const useSubjectVisits = () => useAppStore((state) => state.subjectVisits);
 export const useMedications = () => useAppStore((state) => state.medications);
+export const useSubjectDemographics = () => useAppStore((state) => state.subjectDemographics);

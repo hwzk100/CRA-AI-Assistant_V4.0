@@ -43,6 +43,13 @@ async function saveSettings(): Promise<void> {
 }
 
 /**
+ * Get current settings (synchronous, for internal use)
+ */
+export function getCurrentSettings(): AppSettings {
+  return { ...currentSettings };
+}
+
+/**
  * Register settings handlers
  */
 export function registerSettingsHandlers(): void {

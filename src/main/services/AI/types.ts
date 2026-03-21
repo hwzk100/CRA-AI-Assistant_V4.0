@@ -81,6 +81,12 @@ export interface ExtractSubjectDataResult {
   subjectNumber?: string;
   screeningNumber?: string;
   randomizationNumber?: string;
+  age?: number | null;
+  gender?: string | null;
+  height?: number | null;
+  weight?: number | null;
+  ethnicity?: string | null;
+  birthDate?: string | null;
 }
 
 export interface ExtractSubjectVisitDatesResult {

@@ -1,9 +1,10 @@
 const path = require('path');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
+const webpack = require('webpack');
 
 module.exports = {
   mode: process.env.NODE_ENV || 'development',
-  target: 'electron-renderer',
+  target: 'web', // 改为 web 目标，避免 Node.js 全局变量依赖
   entry: './src/renderer/index.tsx',
   output: {
     path: path.resolve(__dirname, 'dist', 'renderer'),
@@ -21,7 +22,12 @@ module.exports = {
     rules: [
       {
         test: /\.tsx?$/,
-        use: 'ts-loader',
+        use: {
+          loader: 'ts-loader',
+          options: {
+            transpileOnly: true,
+          },
+        },
         exclude: /node_modules/,
       },
       {
@@ -46,13 +52,20 @@ module.exports = {
       template: './index.html',
       filename: 'index.html',
     }),
+    // Polyfill for global in sandboxed renderer
+    new webpack.DefinePlugin({
+      global: 'globalThis',
+    }),
+    new webpack.ProvidePlugin({
+      global: 'globalThis',
+    }),
   ],
   devServer: {
     static: {
       directory: path.join(__dirname, 'dist', 'renderer'),
     },
     compress: true,
-    port: 3000,
+    port: 8080,
     hot: true,
   },
 };

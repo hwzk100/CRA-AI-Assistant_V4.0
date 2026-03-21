@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(npm run:*)",
+      "Bash(tasklist:*)",
+      "Bash(taskkill:*)",
+      "Bash(npm:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx cross-env:*)",
+      "Bash(npx cnpm:*)",
+      "Bash(rm:*)",
+      "Bash(dir C:\\\\Users\\\\71033\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--CRA-AI-CRA-AI-Assistant-V4-0\\\\tasks:*)",
+      "Bash(powershell:*)",
+      "Bash(ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm install:*)",
+      "Bash(netstat:*)",
+      "Bash(grep:*)"
+    ]
+  }
+}

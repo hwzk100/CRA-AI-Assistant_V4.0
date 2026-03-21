@@ -17,6 +17,9 @@ const electronAPI = {
   extractCriteria: (fileId: string, pdfContent: string) => ipcRenderer.invoke('ai:extractCriteria', fileId, pdfContent),
   extractVisitSchedule: (fileId: string, pdfContent: string) => ipcRenderer.invoke('ai:extractVisitSchedule', fileId, pdfContent),
   extractFromImage: (imagePath: string, prompt: string) => ipcRenderer.invoke('ai:extractFromImage', imagePath, prompt),
+  processProtocolFile: (fileId: string, filePath: string) => ipcRenderer.invoke('ai:processProtocolFile', fileId, filePath),
+  processSubjectFile: (fileId: string, filePath: string) => ipcRenderer.invoke('ai:processSubjectFile', fileId, filePath),
+  analyzeEligibility: (subjectData: string, inclusionCriteria: any[], exclusionCriteria: any[]) => ipcRenderer.invoke('ai:analyzeEligibility', subjectData, inclusionCriteria, exclusionCriteria),
 
   // Excel operations
   exportTracker: (data: any, options: any) => ipcRenderer.invoke('excel:exportTracker', data, options),

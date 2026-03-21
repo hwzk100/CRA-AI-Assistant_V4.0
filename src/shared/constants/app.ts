@@ -3,13 +3,15 @@
  */
 
 import type { WorksheetType, FileFilter } from '../types';
+export type { WorksheetType } from '../types/core';
+export { DEFAULT_SETTINGS } from '../types/core';
 
 // ============================================================================
 // Application Info
 // ============================================================================
 
 export const APP_NAME = 'CRA AI Assistant';
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '4.0.0';
 export const APP_DESCRIPTION = 'Clinical Research Assistant powered by GLM-4 AI';
 export const APP_AUTHOR = 'CRA AI Team';
 
@@ -75,6 +77,12 @@ export const WORKSHEET_CONFIG: Record<
     icon: '💊',
     color: 'orange',
   },
+  subjectDemographics: {
+    title: '受试者信息',
+    description: '受试者人口统计学信息',
+    icon: '👥',
+    color: 'teal',
+  },
 };
 
 // ============================================================================
@@ -135,6 +143,7 @@ export const EXCEL_SHEET_NAMES = {
   visitSchedule: '访视计划',
   subjectVisits: '受试者访视',
   medications: '用药记录',
+  subjectDemographics: '受试者信息',
 } as const;
 
 // ============================================================================

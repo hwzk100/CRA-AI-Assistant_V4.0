@@ -2,8 +2,6 @@
  * CRA AI Assistant - Excel Styles Configuration
  */
 
-import type { CellStyle } from 'exceljs';
-
 // ============================================================================
 // Color Constants
 // ============================================================================
@@ -38,7 +36,7 @@ export const STYLES = {
       horizontal: 'center' as const,
       vertical: 'middle' as const,
     },
-  } as CellStyle,
+  },
 
   // Subtitle style
   subtitle: {
@@ -52,7 +50,7 @@ export const STYLES = {
       horizontal: 'left' as const,
       vertical: 'middle' as const,
     },
-  } as CellStyle,
+  },
 
   // Header style
   header: {
@@ -78,7 +76,7 @@ export const STYLES = {
       bottom: { style: 'thin' as const, color: { argb: COLORS.BORDER } },
       right: { style: 'thin' as const, color: { argb: COLORS.BORDER } },
     },
-  } as CellStyle,
+  },
 
   // Data style
   data: {
@@ -97,7 +95,7 @@ export const STYLES = {
       bottom: { style: 'thin' as const, color: { argb: COLORS.LIGHT_BORDER } },
       right: { style: 'thin' as const, color: { argb: COLORS.LIGHT_BORDER } },
     },
-  } as CellStyle,
+  },
 
   // Center data style
   dataCenter: {
@@ -116,7 +114,7 @@ export const STYLES = {
       bottom: { style: 'thin' as const, color: { argb: COLORS.LIGHT_BORDER } },
       right: { style: 'thin' as const, color: { argb: COLORS.LIGHT_BORDER } },
     },
-  } as CellStyle,
+  },
 
   // Date style
   date: {
@@ -135,7 +133,7 @@ export const STYLES = {
       bottom: { style: 'thin' as const, color: { argb: COLORS.LIGHT_BORDER } },
       right: { style: 'thin' as const, color: { argb: COLORS.LIGHT_BORDER } },
     },
-  } as CellStyle,
+  },
 
   // Warning style
   warning: {
@@ -154,7 +152,7 @@ export const STYLES = {
       bottom: { style: 'thin' as const, color: { argb: COLORS.LIGHT_BORDER } },
       right: { style: 'thin' as const, color: { argb: COLORS.LIGHT_BORDER } },
     },
-  } as CellStyle,
+  },
 
   // Info style
   info: {
@@ -168,7 +166,7 @@ export const STYLES = {
       horizontal: 'left' as const,
       vertical: 'middle' as const,
     },
-  } as CellStyle,
+  },
 } as const;
 
 // ============================================================================

@@ -1,0 +1,29 @@
+npm verbose cli D:\nodejs\node.exe D:\nodejs\node_modules\npm\bin\npm-cli.js
+npm info using npm@11.9.0
+npm info using node@v24.14.0
+npm verbose title npm install
+npm verbose argv "install" "--registry" "https://registry.npmmirror.com" "--no-audit" "--no-fund" "--loglevel" "verbose"
+npm verbose logfile logs-max:10 dir:C:\Users\71033\AppData\Local\npm-cache\_logs\2026-03-15T17_34_33_364Z-
+npm verbose logfile C:\Users\71033\AppData\Local\npm-cache\_logs\2026-03-15T17_34_33_364Z-debug-0.log
+npm http fetch GET 200 https://registry.npmmirror.com/fsevents 150ms (cache revalidated)
+npm http fetch GET 200 https://registry.npmmirror.com/dmg-license 96ms (cache revalidated)
+npm http fetch GET 200 https://registry.npmmirror.com/crc 105ms (cache revalidated)
+npm http fetch GET 200 https://registry.npmmirror.com/@types%2fplist 283ms (cache revalidated)
+npm http fetch GET 200 https://registry.npmmirror.com/iconv-corefoundation 174ms (cache revalidated)
+npm http fetch GET 200 https://registry.npmmirror.com/@types%2fverror 289ms (cache revalidated)
+npm http fetch GET 200 https://registry.npmmirror.com/smart-buffer 114ms (cache revalidated)
+npm http fetch GET 200 https://registry.npmmirror.com/verror 114ms (cache revalidated)
+npm http fetch GET 200 https://registry.npmmirror.com/assert-plus 71ms (cache revalidated)
+npm http fetch GET 200 https://registry.npmmirror.com/cli-truncate 88ms (cache revalidated)
+npm http fetch GET 200 https://registry.npmmirror.com/node-addon-api 91ms (cache revalidated)
+npm http fetch GET 200 https://registry.npmmirror.com/extsprintf 55ms (cache revalidated)
+npm http fetch GET 200 https://registry.npmmirror.com/slice-ansi 33ms (cache revalidated)
+npm http fetch GET 200 https://registry.npmmirror.com/astral-regex 125ms (cache revalidated)
+
+up to date in 7s
+npm verbose cwd D:\CRA AI\CRA-AI-Assistant_V4.0
+npm verbose os Windows_NT 10.0.19045
+npm verbose node v24.14.0
+npm verbose npm  v11.9.0
+npm verbose exit 0
+npm info ok

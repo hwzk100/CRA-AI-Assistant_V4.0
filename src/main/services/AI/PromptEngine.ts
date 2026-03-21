@@ -4,6 +4,8 @@
  */
 
 import type { GLMMessage } from './types';
+import type { Result } from '@shared/types';
+import { ErrorCode } from '@shared/types/core';
 
 export class PromptEngine {
   // ============================================================================
@@ -59,13 +61,30 @@ export class PromptEngine {
 
   private static readonly SUBJECT_DATA_SYSTEM_PROMPT = `${PromptEngine.BASE_SYSTEM_PROMPT}
 
-你需要从受试者文档中提取受试者编号信息。
+你需要从受试者文档中提取受试者的基本信息和编号信息。
+
+请仔细查找并提取以下信息：
+- 受试者编号/筛选号/随机号
+- 年龄（查找"年龄"、"岁"等关键词）
+- 性别（男/女）
+- 身高（cm）
+- 体重（kg）
+- 民族
+- 出生日期
+
+如果某些信息在文档中不存在，请使用 null 值。
 
 输出格式：
 {
   "subjectNumber": "受试者编号",
   "screeningNumber": "筛选号",
-  "randomizationNumber": "随机号"
+  "randomizationNumber": "随机号",
+  "age": 年龄数字或null,
+  "gender": "男"/"女"/null,
+  "height": 身高数字或null,
+  "weight": 体重数字或null,
+  "ethnicity": "民族"或null,
+  "birthDate": "YYYY-MM-DD"或null
 }`;
 
   private static readonly VISIT_DATES_SYSTEM_PROMPT = `${PromptEngine.BASE_SYSTEM_PROMPT}
@@ -126,6 +145,36 @@ export class PromptEngine {
   }
 }`;
 
+  private static readonly ELIGIBILITY_SYSTEM_PROMPT = `${PromptEngine.BASE_SYSTEM_PROMPT}
+
+你需要根据受试者数据，逐一分析受试者是否符合每一条入选标准和排除标准。
+
+对于入选标准：
+- eligible: true 表示符合该标准
+- eligible: false 表示不符合该标准
+
+对于排除标准：
+- eligible: true 表示符合该标准（即应被排除）
+- eligible: false 表示不符合该标准（即不被排除）
+
+输出格式：
+{
+  "inclusion": [
+    {
+      "id": "标准ID",
+      "eligible": true/false,
+      "reason": "符合或不符合的详细原因"
+    }
+  ],
+  "exclusion": [
+    {
+      "id": "标准ID",
+      "eligible": true/false,
+      "reason": "符合或不符合的详细原因"
+    }
+  ]
+}`;
+
   // ============================================================================
   // Prompt Generation Methods
   // ============================================================================
@@ -173,7 +222,7 @@ export class PromptEngine {
       },
       {
         role: 'user',
-        content: `请从以下文档中提取受试者编号信息：\n\n${documentContent}`,
+        content: `请从以下文档中提取受试者的基本信息和编号信息（包括年龄、性别、身高、体重、民族、出生日期等）：\n\n${documentContent}`,
       },
     ];
   }
@@ -258,6 +307,34 @@ export class PromptEngine {
     ];
   }
 
+  /**
+   * Generate prompt for eligibility analysis
+   */
+  static generateEligibilityPrompt(
+    subjectData: string,
+    inclusionCriteria: any[],
+    exclusionCriteria: any[]
+  ): GLMMessage[] {
+    const criteriaText = `
+入选标准：
+${inclusionCriteria.map((c, i) => `${i + 1}. [ID: ${c.id}] ${c.description}`).join('\n')}
+
+排除标准：
+${exclusionCriteria.map((c, i) => `${i + 1}. [ID: ${c.id}] ${c.description}`).join('\n')}
+`;
+
+    return [
+      {
+        role: 'system',
+        content: this.ELIGIBILITY_SYSTEM_PROMPT,
+      },
+      {
+        role: 'user',
+        content: `请根据以下受试者数据，分析其是否符合上述标准：\n\n受试者数据：\n${subjectData}\n\n${criteriaText}`,
+      },
+    ];
+  }
+
   // ============================================================================
   // Content Processing
   // ============================================================================
@@ -307,7 +384,7 @@ export class PromptEngine {
       return {
         success: false,
         error: {
-          code: 'AI_PARSE_ERROR' as const,
+          code: ErrorCode.AI_PARSE_ERROR,
           message: '无法解析 AI 返回的 JSON 数据',
           details: response,
         },

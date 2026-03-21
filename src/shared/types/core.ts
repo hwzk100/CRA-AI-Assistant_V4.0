@@ -2,6 +2,8 @@
  * CRA AI Assistant - Core Type Definitions
  */
 
+import type { ExcelExportOptions } from './worksheet';
+
 // ============================================================================
 // Result Type - Functional Error Handling
 // ============================================================================
@@ -29,6 +31,8 @@ export enum ErrorCode {
   AI_PARSE_ERROR = 'AI_PARSE_ERROR',
   AI_TIMEOUT = 'AI_TIMEOUT',
   AI_INVALID_RESPONSE = 'AI_INVALID_RESPONSE',
+  API_KEY_MISSING = 'API_KEY_MISSING',
+  API_KEY_INVALID = 'API_KEY_INVALID',
 
   // Storage errors
   STORAGE_ERROR = 'STORAGE_ERROR',
@@ -206,7 +210,7 @@ export interface AppSettings {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  apiKey: '', // User needs to provide their own API key
+  apiKey: 'aae27120ea1b408a8555c693ad48d0d0.RsaY4z3BIYwK3OHC', // 智谱 AI 默认 API Key
   apiEndpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
   modelName: 'glm-4',
   storagePath: '',
@@ -228,6 +232,30 @@ export interface FileFilter {
 }
 
 // ============================================================================
+// Subject Demographics Types
+// ============================================================================
+
+/**
+ * 受试者人口统计学信息
+ */
+export interface SubjectDemographics {
+  subjectNumber?: string;
+  screeningNumber?: string;
+  randomizationNumber?: string;
+  age?: number | null;
+  gender?: string | null;      // "男" | "女" | null
+  height?: number | null;      // cm
+  weight?: number | null;      // kg
+  ethnicity?: string | null;
+  birthDate?: string | null;   // YYYY-MM-DD
+}
+
+/**
+ * 提取受试者数据的返回类型（更新）
+ */
+export interface ExtractSubjectDataResult extends SubjectDemographics {}
+
+// ============================================================================
 // Worksheet Base Types
 // ============================================================================
 
@@ -235,6 +263,8 @@ export interface InclusionCriteria {
   id: string;
   category: string;
   description: string;
+  eligible?: boolean; // 是否符合此标准
+  reason?: string; // 符合或不符合的原因
   createdAt: Date;
   updatedAt: Date;
 }
@@ -243,6 +273,8 @@ export interface ExclusionCriteria {
   id: string;
   category: string;
   description: string;
+  eligible?: boolean; // 是否符合此标准（对于排除标准，true 表示不排除）
+  reason?: string; // 符合或不符合的原因
   createdAt: Date;
   updatedAt: Date;
 }
@@ -286,81 +318,20 @@ export type WorksheetType =
   | 'exclusionCriteria'
   | 'visitSchedule'
   | 'subjectVisits'
-  | 'medications';
+  | 'medications'
+  | 'subjectDemographics';
 
 // ============================================================================
-// Excel Export Types (forward reference from worksheet.ts)
+// Excel Export Types (import from worksheet.ts)
 // ============================================================================
 
 export interface ExcelExportData {
   inclusionCriteria: InclusionCriteria[];
   exclusionCriteria: ExclusionCriteria[];
   visitSchedule: VisitSchedule[];
-  subjectVisits: SubjectVisitData[];
+  subjectVisits: any[]; // Use any to avoid circular dependency
   medications: MedicationRecord[];
-}
-
-export interface ExcelExportOptions {
-  outputPath?: string;
-  fileName?: string;
-  author?: string;
-  title?: string;
-  subject?: string;
-}
-
-export interface ExcelExportResult {
-  success: boolean;
-  filePath?: string;
-  error?: string;
-}
-
-// ============================================================================
-// Subject Visit Data (from worksheet.ts)
-// ============================================================================
-
-export interface SubjectVisitData {
-  subjectId: string;
-  visits: SubjectVisitItemData[];
-}
-
-export interface SubjectVisitItemData {
-  visitType: string;
-  plannedDate?: Date;
-  actualDate?: Date;
-  status: 'planned' | 'completed' | 'missed' | 'cancelled';
-  notes?: string;
-}
-
-// ============================================================================
-// Validation Result
-// ============================================================================
-
-export interface ValidationResult {
-  valid: boolean;
-  errors: ValidationError[];
-  warnings: ValidationWarning[];
-}
-
-export interface ValidationError {
-  field: string;
-  message: string;
-  code?: string;
-}
-
-export interface ValidationWarning {
-  field: string;
-  message: string;
-  code?: string;
-}
-
-// ============================================================================
-// Edit State (for tracking edits)
-// ============================================================================
-
-export interface EditState<T> {
-  original: T;
-  current: T;
-  isDirty: boolean;
+  subjectDemographics: SubjectDemographics[];
 }
 
 // ============================================================================
