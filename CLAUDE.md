@@ -200,17 +200,22 @@ The eligibility analysis feature supports analyzing multiple subject files at on
 2. **Batch Processing**: The handler iterates through all files, processing each one sequentially
 3. **Results Structure**: Returns `{ results: [{ filePath, fileName, inclusion: [], exclusion: [] }] }`
 4. **Error Handling**: Continues processing remaining files even if one fails
-5. **Matrix View**: The `EligibilityMatrix` component displays results with files as columns and criteria as rows
+5. **Merged Results Display**: Each criterion shows one merged conclusion instead of a per-file matrix
 
 **Type Extensions**:
 - `InclusionFileResult` and `ExclusionFileResult` interfaces define per-file results
 - `InclusionCriteria.fileResults` and `ExclusionCriteria.fileResults` store analysis results for multiple files
 - Store actions `updateInclusionFileResults` and `updateExclusionFileResults` update multi-file results
 
+**Result Merging Logic** (in `InclusionCriteriaWorksheet` and `ExclusionCriteriaWorksheet`):
+- **Single file**: Direct display of that file's result
+- **All files consistent**: "所有文件均符合/不符合"
+- **Files inconsistent**: Majority voting - "多数符合/不符合 (X/Y 个文件)"
+
 **UI Components**:
-- `InclusionCriteriaWorksheet` and `ExclusionCriteriaWorksheet` have matrix/list view toggle
-- Matrix view shows eligibility badges and reasons for each file/criteria combination
-- List view shows traditional single-file format with backward compatibility
+- `InclusionCriteriaWorksheet` and `ExclusionCriteriaWorksheet` display merged results
+- No matrix view - each criterion shows one merged conclusion
+- Backward compatible with single-file `eligible`/`reason` fields
 
 ### Scanned PDF Processing Flow
 
@@ -218,18 +223,20 @@ For image-based/scanned PDFs, the application uses a direct VLM (Vision Language
 
 1. **PDF Type Detection**: `PDFProcessor.isScannedPDF()` checks if PDF has extractable text
 2. **Image Conversion**: `node-poppler` converts PDF pages to PNG images using `pdfToPpm()`
-3. **Direct VLM Analysis**: Images are sent directly to GLM-4V for analysis
+3. **Direct VLM Analysis**: Images are sent directly to GLM-4.6V-Flash for analysis
 4. **No OCR Step**: Unlike text PDFs, scanned PDFs bypass text extraction and use visual analysis
 
 This approach is used in:
 - `ai:processSubjectFile` - Extracts subject data via `extractSubjectDataFromImage()`
 - `ai:analyzeEligibility` - Evaluates eligibility via `analyzeEligibilityFromImage()`
 
+**Note**: For image-based PDFs, images are converted to PNG and sent to GLM-4.6V-Flash (free vision model) with the `data:image/png;base64,` prefix.
+
 ## PDF Processing
 
 The application processes two types of PDFs:
 - **Text-based PDFs**: Extracted directly using `pdf-parse`
-- **Scanned/Image-based PDFs**: Converted to images using `node-poppler`, then analyzed with GLM-4V
+- **Scanned/Image-based PDFs**: Converted to images using `node-poppler`, then analyzed with GLM-4.6V-Flash
 
 ### PDF Service Architecture
 
@@ -312,7 +319,7 @@ The app requires a Zhipu AI API key for GLM-4. Users must:
 3. Test connection before using AI features
 
 Default API endpoint: `https://open.bigmodel.cn/api/paas/v4/chat/completions`
-Default model: `glm-4` (use `glm-4v` for image processing)
+Default model: `glm-4` (use `glm-4.6v-flash` for image processing - free vision model)
 
 **Security Note**: `src/shared/types/core.ts` contains `DEFAULT_SETTINGS` with a hardcoded development API key. This key should be removed before production deployment as it may be rate-limited or revoked. Users must provide their own key for production use.
 

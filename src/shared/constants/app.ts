@@ -11,7 +11,7 @@ export { DEFAULT_SETTINGS } from '../types/core';
 // ============================================================================
 
 export const APP_NAME = 'CRA AI Assistant';
-export const APP_VERSION = '4.0.0';
+export const APP_VERSION = '4.0.3';
 export const APP_DESCRIPTION = 'Clinical Research Assistant powered by GLM-4 AI';
 export const APP_AUTHOR = 'CRA AI Team';
 

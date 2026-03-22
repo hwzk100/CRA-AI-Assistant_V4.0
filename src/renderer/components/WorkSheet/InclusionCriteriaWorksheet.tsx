@@ -7,7 +7,6 @@ import { useInclusionCriteria, useStore, useSubjectFiles } from '../../hooks/use
 import type { InclusionCriteria } from '@shared/types';
 import type { InclusionFileResult } from '@shared/types';
 import { generateId } from '@shared/types/worksheet';
-import { EligibilityMatrix } from './shared/EligibilityMatrix';
 
 export const InclusionCriteriaWorksheet: React.FC = () => {
   const inclusionCriteria = useInclusionCriteria();
@@ -29,7 +28,6 @@ export const InclusionCriteriaWorksheet: React.FC = () => {
   });
   const [isAdding, setIsAdding] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [showMatrixView, setShowMatrixView] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState({
     current: 0,
     total: 0,
@@ -143,7 +141,6 @@ export const InclusionCriteriaWorksheet: React.FC = () => {
 
         console.log('[InclusionCriteriaWorksheet] Updated', updateCount, 'criteria with file results');
         alert(`资格分析完成！已分析 ${completedSubjectFiles.length} 个文件，更新 ${updateCount} 条标准。`);
-        setShowMatrixView(true);
       } else {
         alert('分析失败：' + (result.error?.message || '未知错误'));
       }
@@ -200,6 +197,63 @@ export const InclusionCriteriaWorksheet: React.FC = () => {
     }
   };
 
+  // 合并多文件结果为单一结论
+  const getMergedResult = (criteria: InclusionCriteria) => {
+    // 优先使用单文件结果（向后兼容）
+    if (criteria.eligible !== undefined) {
+      return { eligible: criteria.eligible, reason: criteria.reason };
+    }
+
+    // 合并多文件结果
+    if (criteria.fileResults && criteria.fileResults.length > 0) {
+      const fileResults = criteria.fileResults;
+
+      // 情况1：只有一个文件 - 直接使用该结果
+      if (fileResults.length === 1) {
+        return {
+          eligible: fileResults[0].eligible,
+          reason: fileResults[0].reason
+        };
+      }
+
+      // 情况2：所有文件结果一致
+      const allEligible = fileResults.every(r => r.eligible === true);
+      const allIneligible = fileResults.every(r => r.eligible === false);
+
+      if (allEligible) {
+        return {
+          eligible: true,
+          reason: `所有文件均符合：${fileResults.map(r => r.fileName).join('、')}`
+        };
+      }
+
+      if (allIneligible) {
+        return {
+          eligible: false,
+          reason: `所有文件均不符合：${fileResults.map(r => r.fileName).join('、')}`
+        };
+      }
+
+      // 情况3：结果不一致 - 使用多数投票
+      const eligibleCount = fileResults.filter(r => r.eligible).length;
+      const totalCount = fileResults.length;
+
+      if (eligibleCount > totalCount / 2) {
+        return {
+          eligible: true,
+          reason: `多数符合 (${eligibleCount}/${totalCount} 个文件)`
+        };
+      } else {
+        return {
+          eligible: false,
+          reason: `多数不符合 (${totalCount - eligibleCount}/${totalCount} 个文件)`
+        };
+      }
+    }
+
+    return null;
+  };
+
   const getEligibilityBadge = (eligible?: boolean) => {
     if (eligible === undefined) {
       return null;
@@ -229,13 +283,8 @@ export const InclusionCriteriaWorksheet: React.FC = () => {
   const handleClearEligibility = () => {
     if (confirm('确定要清除所有分析结果吗？这将重置所有标准的资格状态。')) {
       clearInclusionEligibility();
-      setShowMatrixView(false);
     }
   };
-
-  const completedSubjectFiles = subjectFiles.filter(f => f.status === 'completed');
-  const hasMultipleFiles = completedSubjectFiles.length > 1;
-  const hasFileResults = inclusionCriteria.some(c => c.fileResults && c.fileResults.length > 0);
 
   return (
     <div className="flex-1 flex flex-col bg-white overflow-hidden">
@@ -277,28 +326,15 @@ export const InclusionCriteriaWorksheet: React.FC = () => {
             </button>
           )}
           {hasAnalyzedData && (
-            <>
-              {(hasMultipleFiles || hasFileResults) && (
-                <button
-                  onClick={() => setShowMatrixView(!showMatrixView)}
-                  className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition-colors flex items-center space-x-2"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-                  </svg>
-                  <span>{showMatrixView ? '列表视图' : '矩阵视图'}</span>
-                </button>
-              )}
-              <button
-                onClick={handleClearEligibility}
-                className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors flex items-center space-x-2"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-                <span>清除分析结果</span>
-              </button>
-            </>
+            <button
+              onClick={handleClearEligibility}
+              className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors flex items-center space-x-2"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              <span>清除分析结果</span>
+            </button>
           )}
           <button
             onClick={() => setIsAdding(true)}
@@ -314,13 +350,7 @@ export const InclusionCriteriaWorksheet: React.FC = () => {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
-        {showMatrixView && hasAnalyzedData ? (
-          <EligibilityMatrix
-            criteria={inclusionCriteria}
-            subjectFiles={subjectFiles}
-            isInclusion={true}
-          />
-        ) : inclusionCriteria.length === 0 ? (
+        {inclusionCriteria.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-400">
             <svg className="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -384,11 +414,26 @@ export const InclusionCriteriaWorksheet: React.FC = () => {
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
                             <p className="text-gray-700">{c.description}</p>
-                            {c.reason && (
-                              <p className="text-sm text-gray-500 mt-2 italic">
-                                原因：{c.reason}
-                              </p>
-                            )}
+                            <div className="mt-2">
+                              {(() => {
+                                const mergedResult = getMergedResult(c);
+                                if (mergedResult) {
+                                  return (
+                                    <div className="flex items-center space-x-2">
+                                      <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                        mergedResult.eligible
+                                          ? 'bg-green-100 text-green-700'
+                                          : 'bg-red-100 text-red-700'
+                                      }`}>
+                                        {mergedResult.eligible ? '符合' : '不符合'}
+                                      </span>
+                                      <span className="text-sm text-gray-600">{mergedResult.reason}</span>
+                                    </div>
+                                  );
+                                }
+                                return null;
+                              })()}
+                            </div>
                           </div>
                           <div className="flex items-center space-x-2 ml-4">
                             {getEligibilityBadge(c.eligible)}

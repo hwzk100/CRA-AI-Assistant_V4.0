@@ -1,6 +1,6 @@
 {
   "name": "cra-ai-assistant",
-  "version": "4.0.0",
+  "version": "4.0.3",
   "description": "CRA AI Assistant - Clinical Research Assistant powered by GLM-4 AI",
   "main": "dist/main/index.js",
   "author": "CRA AI Team",

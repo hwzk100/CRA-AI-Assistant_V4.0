@@ -5,9 +5,7 @@
 import React, { useState } from 'react';
 import { useExclusionCriteria, useStore, useSubjectFiles } from '../../hooks/useStore';
 import type { ExclusionCriteria } from '@shared/types';
-import type { ExclusionFileResult } from '@shared/types';
 import { generateId } from '@shared/types/worksheet';
-import { EligibilityMatrix } from './shared/EligibilityMatrix';
 
 export const ExclusionCriteriaWorksheet: React.FC = () => {
   const exclusionCriteria = useExclusionCriteria();
@@ -28,7 +26,63 @@ export const ExclusionCriteriaWorksheet: React.FC = () => {
   });
   const [isAdding, setIsAdding] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [showMatrixView, setShowMatrixView] = useState(false);
+
+  // 合并多文件结果为单一结论
+  const getMergedResult = (criteria: ExclusionCriteria) => {
+    // 优先使用单文件结果（向后兼容）
+    if (criteria.eligible !== undefined) {
+      return { eligible: criteria.eligible, reason: criteria.reason };
+    }
+
+    // 合并多文件结果
+    if (criteria.fileResults && criteria.fileResults.length > 0) {
+      const fileResults = criteria.fileResults;
+
+      // 情况1：只有一个文件 - 直接使用该结果
+      if (fileResults.length === 1) {
+        return {
+          eligible: fileResults[0].eligible,
+          reason: fileResults[0].reason
+        };
+      }
+
+      // 情况2：所有文件结果一致
+      const allEligible = fileResults.every(r => r.eligible === true);
+      const allIneligible = fileResults.every(r => r.eligible === false);
+
+      if (allEligible) {
+        return {
+          eligible: true,
+          reason: `所有文件均符合：${fileResults.map(r => r.fileName).join('、')}`
+        };
+      }
+
+      if (allIneligible) {
+        return {
+          eligible: false,
+          reason: `所有文件均不符合：${fileResults.map(r => r.fileName).join('、')}`
+        };
+      }
+
+      // 情况3：结果不一致 - 使用多数投票
+      const eligibleCount = fileResults.filter(r => r.eligible).length;
+      const totalCount = fileResults.length;
+
+      if (eligibleCount > totalCount / 2) {
+        return {
+          eligible: true,
+          reason: `多数符合 (${eligibleCount}/${totalCount} 个文件)`
+        };
+      } else {
+        return {
+          eligible: false,
+          reason: `多数不符合 (${totalCount - eligibleCount}/${totalCount} 个文件)`
+        };
+      }
+    }
+
+    return null;
+  };
 
   // 分析受试者资格
   const handleAnalyzeEligibility = async () => {
@@ -116,7 +170,6 @@ export const ExclusionCriteriaWorksheet: React.FC = () => {
 
         console.log('[ExclusionCriteriaWorksheet] Updated', updateCount, 'criteria with file results');
         alert(`资格分析完成！已分析 ${completedSubjectFiles.length} 个文件，更新 ${updateCount} 条标准。`);
-        setShowMatrixView(true);
       } else {
         alert('分析失败：' + (result.error?.message || '未知错误'));
       }
@@ -172,24 +225,6 @@ export const ExclusionCriteriaWorksheet: React.FC = () => {
     }
   };
 
-  const getEligibilityBadge = (eligible?: boolean) => {
-    if (eligible === undefined) {
-      return null;
-    }
-    // For exclusion criteria:
-    // eligible = true means should be excluded (red badge)
-    // eligible = false means not excluded (green badge)
-    return (
-      <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-        eligible
-          ? 'bg-red-100 text-red-700'
-          : 'bg-green-100 text-green-700'
-      }`}>
-        {eligible ? '✗ 应排除' : '✓ 不排除'}
-      </span>
-    );
-  };
-
   const groupedCriteria = exclusionCriteria.reduce((acc, criteria) => {
     const category = criteria.category || '未分类';
     if (!acc[category]) {
@@ -204,13 +239,8 @@ export const ExclusionCriteriaWorksheet: React.FC = () => {
   const handleClearEligibility = () => {
     if (confirm('确定要清除所有分析结果吗？这将重置所有标准的资格状态。')) {
       clearExclusionEligibility();
-      setShowMatrixView(false);
     }
   };
-
-  const completedSubjectFiles = subjectFiles.filter(f => f.status === 'completed');
-  const hasMultipleFiles = completedSubjectFiles.length > 1;
-  const hasFileResults = exclusionCriteria.some(c => c.fileResults && c.fileResults.length > 0);
 
   return (
     <div className="flex-1 flex flex-col bg-white overflow-hidden">
@@ -253,17 +283,6 @@ export const ExclusionCriteriaWorksheet: React.FC = () => {
           )}
           {hasAnalyzedData && (
             <>
-              {(hasMultipleFiles || hasFileResults) && (
-                <button
-                  onClick={() => setShowMatrixView(!showMatrixView)}
-                  className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition-colors flex items-center space-x-2"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-                  </svg>
-                  <span>{showMatrixView ? '列表视图' : '矩阵视图'}</span>
-                </button>
-              )}
               <button
                 onClick={handleClearEligibility}
                 className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors flex items-center space-x-2"
@@ -289,13 +308,7 @@ export const ExclusionCriteriaWorksheet: React.FC = () => {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
-        {showMatrixView && hasAnalyzedData ? (
-          <EligibilityMatrix
-            criteria={exclusionCriteria}
-            subjectFiles={subjectFiles}
-            isInclusion={false}
-          />
-        ) : exclusionCriteria.length === 0 ? (
+        {exclusionCriteria.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-400">
             <svg className="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -359,14 +372,26 @@ export const ExclusionCriteriaWorksheet: React.FC = () => {
                         <div className="flex items-start justify-between">
                           <div className="flex-1">
                             <p className="text-gray-700">{c.description}</p>
-                            {c.reason && (
-                              <p className="text-sm text-gray-500 mt-2 italic">
-                                原因：{c.reason}
-                              </p>
-                            )}
+                            {(() => {
+                              const mergedResult = getMergedResult(c);
+                              if (mergedResult) {
+                                return (
+                                  <div className="flex items-center space-x-2 mt-2">
+                                    <span className={`px-2 py-1 rounded text-xs font-medium ${
+                                      mergedResult.eligible
+                                        ? 'bg-red-100 text-red-700'
+                                        : 'bg-green-100 text-green-700'
+                                    }`}>
+                                      {mergedResult.eligible ? '✗ 应排除' : '✓ 不排除'}
+                                    </span>
+                                    <span className="text-sm text-gray-600">{mergedResult.reason}</span>
+                                  </div>
+                                );
+                              }
+                              return null;
+                            })()}
                           </div>
                           <div className="flex items-center space-x-2 ml-4">
-                            {getEligibilityBadge(c.eligible)}
                             <button
                               onClick={() => handleEdit(c)}
                               className="p-1 text-gray-400 hover:text-primary-500 transition-colors"
