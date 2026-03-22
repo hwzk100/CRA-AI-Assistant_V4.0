@@ -247,3 +247,15 @@ export const PATTERNS = {
   DATE: /^\d{4}-\d{2}-\d{2}$/,
   TIME: /^\d{2}:\d{2}$/,
 } as const;
+
+// ============================================================================
+// PDF Processing Configuration
+// ============================================================================
+
+export const PDF_CONFIG = {
+  MAX_PAGES_FOR_CONVERSION: 10,      // Limit pages to process
+  SCANNED_TEXT_THRESHOLD: 100,       // Min chars to consider text-based
+  MEANINGFUL_CHAR_RATIO: 0.3,        // Min ratio of meaningful chars
+  TEMP_DIR: 'cra-ai-pdf-cache',      // Temp directory for images
+  IMAGE_SCALE: 2.0,                   // Scale factor for PDF to image conversion
+} as const;

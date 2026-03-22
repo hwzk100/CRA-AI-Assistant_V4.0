@@ -16,7 +16,21 @@
       "Bash(powershell:*)",
       "Bash(ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm install:*)",
       "Bash(netstat:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(curl:*)",
+      "Bash(npx electron:*)",
+      "Bash(node:*)",
+      "Bash(where pdftoppm:*)",
+      "Bash(handle:*)",
+      "Bash(pip:*)",
+      "Bash(dir C:\\\\ProgramData\\\\chocolatey\\\\lib\\\\poppler:*)",
+      "Bash(cmd:*)",
+      "Bash(python:*)",
+      "WebSearch",
+      "mcp__web-reader__webReader",
+      "mcp__web-search-prime__web_search_prime",
+      "mcp__zread__read_file",
+      "mcp__zread__get_repo_structure"
     ]
   }
 }

@@ -29,14 +29,98 @@
 | **Zustand** | ^4.4.0 | 状态管理 |
 | **Tailwind CSS** | ^3.3.0 | 样式框架 |
 | **ExcelJS** | ^4.4.0 | Excel 生成 |
-| **pdf-parse** | ^1.1.1 | PDF 解析 |
+| **pdf-parse** | ^1.1.1 | PDF 文本解析 |
+| **pdf-to-img** | ^3.0.0 | PDF 转图片（扫描版处理） |
 | **axios** | ^1.6.0 | HTTP 客户端 |
 
 ### AI 集成
 
 - **服务商**：智谱 AI (Zhipu AI)
-- **模型**：GLM-4 / GLM-4V
 - **API 端点**：https://open.bigmodel.cn/api/paas/v4/chat/completions
+
+#### GLM-4 模型版本
+
+智谱 AI 提供多种 GLM 模型版本，本项目使用：
+
+| 模型 | 类型 | 支持输入 | 使用场景 |
+|------|------|----------|----------|
+| **glm-4** | 文本模型 | 仅文本 | 文本数据提取、标准分析、文本理解 |
+| **glm-4.6v-flash** | 视觉模型（免费） | 文本 + 图片 | 扫描版 PDF 处理、图片 OCR、视觉理解 |
+
+**重要提示**：
+- 本项目使用 **GLM-4.6V-Flash** 免费视觉模型处理图片
+- 处理图片或扫描版 PDF 时，会自动使用 `glm-4.6v-flash` 模型
+- GLM-4.6V-Flash 是智谱 AI 提供的免费视觉推理模型，无需额外权限
+
+**免费视觉模型特性**：
+- 视觉推理能力
+- 支持工具调用
+- 128K 上下文
+- 32K 最大输出
+
+**模型使用场景**：
+
+| 场景 | 使用模型 | 说明 |
+|------|----------|------|
+| 入选/排除标准提取 | glm-4 | 从方案文本中提取标准 |
+| 访视计划提取 | glm-4 | 从方案文本中提取访视安排 |
+| 受试者信息提取（文本） | glm-4 | 从文本 PDF 中提取人口统计学信息 |
+| 受试者信息提取（扫描版） | glm-4.6v-flash | 从图片中提取人口统计学信息 |
+| 扫描版 PDF 处理 | glm-4.6v-flash | 从图片中提取文字（OCR） |
+| 图片文字识别 | glm-4.6v-flash | 从医疗文档图片中提取文字 |
+| 资格分析（文本） | glm-4 | 基于提取的文本分析是否符合标准 |
+| 资格分析（图片） | glm-4.6v-flash | 直接从图片分析是否符合入选/排除标准 |
+
+#### GLM-4V 图片格式要求
+
+**重要**：调用 GLM-4V 视觉模型时，base64 编码的图片必须包含 **data URI 前缀**。
+
+正确的格式（参考智谱 AI 官方 Python SDK）：
+```typescript
+// ✅ 正确：包含 data URI 前缀
+const messages = [
+  {
+    role: 'user',
+    content: [
+      {
+        type: 'image_url',
+        image_url: {
+          url: `data:image/png;base64,${base64Image}`
+        }
+      },
+      {
+        type: 'text',
+        text: '请描述图片内容'
+      }
+    ]
+  }
+];
+
+// ❌ 错误：缺少前缀会导致 API 错误 1210
+const messages = [
+  {
+    role: 'user',
+    content: [
+      {
+        type: 'image_url',
+        image_url: {
+          url: base64Image  // 缺少 data:image/xxx;base64, 前缀
+        }
+      }
+    ]
+  }
+];
+```
+
+**支持的图片格式**：
+- `data:image/png;base64,` - PNG 图片
+- `data:image/jpeg;base64,` - JPEG 图片
+- `data:image/jpg;base64,` - JPG 图片（同 JPEG）
+
+**相关方法**（已正确实现）：
+- `GLMService.extractFromImage()` - 通用图片提取
+- `GLMService.extractSubjectDataFromImage()` - 受试者数据提取
+- `GLMService.analyzeEligibilityFromImage()` - 资格分析
 
 ---
 
@@ -280,6 +364,90 @@ enum FileStatus {
 }
 ```
 
+### PDF 处理机制
+
+应用支持两种类型的 PDF 文件：
+
+#### 1. 文本 PDF（Text-based PDF）
+
+直接使用 `pdf-parse` 库提取文本内容：
+
+```typescript
+const buffer = await fs.readFile(filePath);
+const data = await pdfParse(buffer);
+const content = data.text; // 提取的文本
+```
+
+#### 2. 扫描版 PDF（Scanned PDF）
+
+当检测到 PDF 文本内容少于 50 个字符时，自动切换到图片处理模式：
+
+```typescript
+// 检测扫描版 PDF
+const meaningfulTextLength = content.replace(/\s+/g, '').length;
+if (meaningfulTextLength < 50) {
+  // 使用 GLM-4V 视觉模型从图片中提取文字
+  const scannedText = await readScannedPDF(filePath, settings);
+}
+```
+
+**扫描版 PDF 处理流程**：
+
+1. 使用 `pdf-to-img` 将 PDF 页面转换为 PNG 图片
+2. 使用 GLM-4V 视觉模型从图片中提取文字
+3. 只处理前 3 页（节省时间和 API 配额）
+4. 合并所有页面的提取结果
+
+```typescript
+async function readScannedPDF(filePath: string, settings: { apiKey: string; modelName: string }): Promise<string> {
+  const service = getGLMService({ apiKey: settings.apiKey, modelName: 'glm-4v' });
+  const pdfConvert = await pdfToPng(filePath, { scale: 2.0 });
+  const allText: string[] = [];
+
+  let pageCount = 0;
+  for await (const page of pdfConvert) {
+    pageCount++;
+
+    // 保存到临时文件
+    const tempImagePath = path.join(os.tmpdir(), `pdf_page_${pageCount}.png`);
+    await fs.writeFile(tempImagePath, page.content);
+
+    // 使用 AI 提取文字
+    const result = await service.extractFromImage(tempImagePath, '请提取图片中的所有文字内容...');
+    if (result.success && result.data.text) {
+      allText.push(result.data.text);
+    }
+
+    // 清理临时文件
+    await fs.unlink(tempImagePath);
+
+    // 只处理前 3 页
+    if (pageCount >= 3) break;
+  }
+
+  return allText.join('\n\n');
+}
+```
+
+**PDF 处理缓存**：
+
+```typescript
+const pdfContentCache = new Map<string, string>();
+
+async function readPDFContent(filePath: string, settings?: Settings): Promise<string> {
+  // 检查缓存
+  if (pdfContentCache.has(filePath)) {
+    return pdfContentCache.get(filePath)!;
+  }
+
+  // ... 处理逻辑 ...
+
+  // 缓存结果
+  pdfContentCache.set(filePath, content);
+  return content;
+}
+```
+
 ---
 
 ## 开发指南
@@ -417,6 +585,27 @@ async extractMyData(fileContent: string): Promise<Result<MyData[]>> {
 ```
 
 3. **添加 IPC 处理器**（参考"添加新的 IPC 处理器"）
+
+#### 处理扫描版文档
+
+如果你的新功能需要处理扫描版 PDF：
+
+```typescript
+// 在 aiHandler.ts 中
+ipcMain.handle('ai:extractMyNewData', async (event, fileId: string, filePath: string) => {
+  const settings = await getSettings();
+
+  // 自动检测并处理扫描版 PDF
+  const content = await readPDFContent(filePath, {
+    apiKey: settings.apiKey,
+    modelName: settings.modelName
+  });
+
+  // content 现在包含了从文本 PDF 或扫描版 PDF 提取的文字
+  const result = await service.extractMyData(fileId, content);
+  return result;
+});
+```
 
 ### 样式开发指南
 
@@ -657,6 +846,85 @@ npm run dev
 
 **A**: 检查 `GLMService.ts` 中的 JSON 解析逻辑，确保处理各种响应格式（纯 JSON、Markdown 代码块等）。
 
+### Q: 扫描版 PDF 无法提取文字？
+
+**A**: 确保以下几点：
+
+1. **检查 API Key 配置**：确保 GLM-4V 模型的 API Key 已正确配置
+2. **检查 PDF 转换**：查看控制台是否有 `[AI Handler] PDF appears to be scanned` 日志
+3. **检查临时文件**：确认系统临时目录可写
+4. **检查页面数量**：默认只处理前 3 页，可以调整 `readScannedPDF` 函数中的限制
+
+### Q: PDF 内容提取为空？
+
+**A**: 可能的原因：
+
+1. **PDF 是图片格式**：检查日志中是否有 `PDF text length (without spaces): < 50`
+2. **PDF 加密**：某些 PDF 有密码保护
+3. **PDF 编码问题**：某些 PDF 使用特殊编码
+
+解决方法：查看调试文件 `C:\Users\<用户名>\.claude\debug\pdf-content-debug.txt` 的内容。
+
+### Q: GLM-4V 调用失败？
+
+**A**: 确保以下几点：
+
+1. **API Key 权限**：确认 API Key 支持 GLM-4V 模型
+2. **模型名称**：使用 `glm-4v` 而不是 `glm-4`
+3. **图片格式**：确保图片是 JPEG 或 PNG 格式
+4. **图片大小**：GLM-4V 对图片大小有限制，通常 10MB 以内
+
+**常见错误**：
+
+- **错误代码 1210**：`API 调用参数有误，请检查文档。`
+  - 原因：使用 `glm-4` 模型处理图片输入
+  - 解决：切换到 `glm-4v` 模型
+
+### Q: API 返回错误代码 1210？
+
+**A**: 错误代码 1210 表示"API 调用参数有误"，可能的原因有：
+
+**原因 1：使用了错误的模型**
+- **症状**：错误信息为 `API 调用参数有误，请检查文档。`
+- **原因**：`glm-4` 模型仅支持文本输入，不支持图片
+- **解决**：在图片相关操作中使用 `glm-4.6v-flash` 免费视觉模型
+
+代码示例：
+```typescript
+// ✅ 正确：图片处理使用 GLM-4.6V-Flash（免费）
+const result = await this.callAPI(messages, retries, 'glm-4.6v-flash');
+
+// ❌ 错误：图片处理使用 glm-4 会报错
+const result = await this.callAPI(messages, retries, 'glm-4');
+```
+
+**原因 2：base64 图片缺少 data URI 前缀**
+- **症状**：即使使用视觉模型仍然返回错误 1210
+- **原因**：base64 编码的图片必须包含 `data:image/xxx;base64,` 前缀
+- **解决**：确保图片 URL 格式正确
+
+代码示例：
+```typescript
+// ✅ 正确：包含 data URI 前缀
+url: `data:image/png;base64,${base64Image}`
+
+// ❌ 错误：缺少前缀
+url: base64Image
+```
+
+**原因 3：API Key 权限不足**
+- **症状**：所有格式都正确但仍然报错
+- **原因**：API Key 可能没有视觉模型的访问权限
+- **解决**：访问 https://open.bigmodel.cn/ 检查 API Key 权限
+
+**注意**：GLM-4.6V-Flash 是智谱 AI 的免费视觉模型，应该可以直接使用，无需特殊权限。
+
+**调试步骤**：
+1. 确认使用 `glm-4.6v-flash` 模型（非 `glm-4`）
+2. 确认图片 URL 包含 data URI 前缀
+3. 检查 API Key 是否有效
+4. 查看控制台日志中的完整错误信息
+
 ---
 
 ## 性能优化建议
@@ -694,3 +962,26 @@ MIT License - 详见 LICENSE 文件
 ---
 
 *本文档最后更新：2026年3月21日*
+
+## 更新日志
+
+### v4.0.2 (2026-03-23)
+- **重大更新**：切换到智谱 AI 免费视觉模型 GLM-4.6V-Flash
+  - 替换付费的 glm-4v 模型为免费的 glm-4.6v-flash
+  - GLM-4.6V-Flash 支持视觉推理、工具调用、128K 上下文
+  - 用户无需额外权限即可使用视觉功能
+- **修复**：GLM-4V API 调用错误 1210
+  - 修复 base64 图片缺少 data URI 前缀的问题
+  - 根据智谱 AI 官方 Python SDK 确认正确格式
+  - 更新 `extractFromImage`、`extractSubjectDataFromImage`、`analyzeEligibilityFromImage` 方法
+- **文档**：添加 GLM-4.6V-Flash 免费视觉模型说明和格式要求
+
+### v4.0.1 (2026-03-23)
+- 添加扫描版 PDF 处理支持（GLM-4V）
+- 添加受试者人口统计学信息提取功能
+- 更新 PDF 读取逻辑以自动检测文本/扫描版
+
+### v4.0.0 (2026-03-21)
+- 添加扫描版 PDF 处理支持（GLM-4V）
+- 添加受试者人口统计学信息提取功能
+- 更新 PDF 读取逻辑以自动检测文本/扫描版

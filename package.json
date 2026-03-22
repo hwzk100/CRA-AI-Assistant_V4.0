@@ -22,8 +22,8 @@
   "dependencies": {
     "axios": "^1.6.0",
     "exceljs": "^4.4.0",
+    "node-poppler": "^9.1.1",
     "pdf-parse": "^1.1.1",
-    "pdf-to-img": "^5.0.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "zustand": "^4.4.0"
@@ -60,6 +60,15 @@
     "files": [
       "dist/**/*",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/poppler",
+        "to": "poppler",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "win": {
       "target": [

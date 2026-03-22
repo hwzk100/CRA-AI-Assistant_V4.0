@@ -1,4 +1,5 @@
 const path = require('path');
+const CopyWebpackPlugin = require('copy-webpack-plugin');
 
 module.exports = {
   mode: process.env.NODE_ENV || 'development',
@@ -7,6 +8,22 @@ module.exports = {
   output: {
     path: path.resolve(__dirname, 'dist', 'main'),
     filename: 'index.js',
+  },
+  plugins: [
+    // Copy Python scripts that need to run outside webpack bundle
+    new CopyWebpackPlugin({
+      patterns: [
+        {
+          from: 'src/main/services/PDFService/pdf_converter.py',
+          to: path.resolve(__dirname, 'dist', 'main', 'pdf_converter.py'),
+        },
+      ],
+    }),
+  ],
+  externals: {
+    // Externalize pdf-to-img and its dependencies to avoid bundling browser-specific code
+    'pdf-to-img': 'commonjs pdf-to-img',
+    'pdfjs-dist': 'commonjs pdfjs-dist',
   },
   resolve: {
     extensions: ['.ts', '.js'],

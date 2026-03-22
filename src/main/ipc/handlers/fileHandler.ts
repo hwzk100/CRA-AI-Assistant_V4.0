@@ -65,8 +65,9 @@ export function registerFileHandlers(): void {
         path: info.path!,
         size: info.size!,
         type: info.type!,
-        status: 'pending' as FileStatus,
+        status: 'completed' as FileStatus,
         uploadedAt: new Date(),
+        processedAt: new Date(),
         metadata: {},
       };
 

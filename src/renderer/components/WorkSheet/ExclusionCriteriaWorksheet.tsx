@@ -5,12 +5,21 @@
 import React, { useState } from 'react';
 import { useExclusionCriteria, useStore, useSubjectFiles } from '../../hooks/useStore';
 import type { ExclusionCriteria } from '@shared/types';
+import type { ExclusionFileResult } from '@shared/types';
 import { generateId } from '@shared/types/worksheet';
+import { EligibilityMatrix } from './shared/EligibilityMatrix';
 
 export const ExclusionCriteriaWorksheet: React.FC = () => {
   const exclusionCriteria = useExclusionCriteria();
   const subjectFiles = useSubjectFiles();
-  const { addExclusionCriteria, updateExclusionCriteria, removeExclusionCriteria, updateExclusionEligibility } = useStore();
+  const {
+    addExclusionCriteria,
+    updateExclusionCriteria,
+    removeExclusionCriteria,
+    updateExclusionEligibility,
+    updateExclusionFileResults,
+    clearExclusionEligibility
+  } = useStore();
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{ category: string; description: string }>({
@@ -19,6 +28,7 @@ export const ExclusionCriteriaWorksheet: React.FC = () => {
   });
   const [isAdding, setIsAdding] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [showMatrixView, setShowMatrixView] = useState(false);
 
   // 分析受试者资格
   const handleAnalyzeEligibility = async () => {
@@ -27,35 +37,86 @@ export const ExclusionCriteriaWorksheet: React.FC = () => {
       return;
     }
 
-    if (exclusionCriteria.length === 0) {
+    if (!exclusionCriteria || exclusionCriteria.length === 0) {
       alert('请先上传方案文档以提取排除标准');
+      return;
+    }
+
+    // Get all completed subject files
+    const completedSubjectFiles = subjectFiles.filter(f => f.status === 'completed');
+
+    if (completedSubjectFiles.length === 0) {
+      alert('请先等待受试者文件处理完成');
       return;
     }
 
     setIsAnalyzing(true);
 
     try {
-      // 获取受试者数据（从第一个已完成的受试者文件）
-      const completedSubjectFile = subjectFiles.find(f => f.status === 'completed');
-      if (!completedSubjectFile) {
-        alert('请先等待受试者文件处理完成');
-        setIsAnalyzing(false);
-        return;
-      }
+      // Prepare criteria data
+      const inclusionData: any[] = []; // Inclusion criteria empty
+      const exclusionData = exclusionCriteria.map(c => ({ id: c.id, description: c.description }));
 
-      // 调用 AI 分析资格
+      console.log('[ExclusionCriteriaWorksheet] Analyzing eligibility with:', {
+        fileCount: completedSubjectFiles.length,
+        inclusionCount: inclusionData.length,
+        exclusionCount: exclusionData.length
+      });
+
+      // Prepare file paths
+      const filePaths = completedSubjectFiles.map(f => f.path);
+
+      // Call AI analysis
       const result = await window.electronAPI.analyzeEligibility(
-        completedSubjectFile.path, // 传递文件路径而不是空字符串
-        [], // 入选标准留空，因为这是排除标准工作表
-        exclusionCriteria.map(c => ({ id: c.id, description: c.description }))
+        filePaths,
+        inclusionData,
+        exclusionData
       );
 
-      if (result.success && result.data) {
-        // 更新排除标准的符合状态
-        result.data.exclusion.forEach((item: any) => {
-          updateExclusionEligibility(item.id, item.eligible, item.reason);
+      console.log('[ExclusionCriteriaWorksheet] Analysis result:', result);
+
+      if (result.success && result.data?.results) {
+        // Organize results by criteria ID
+        const criteriaMap = new Map<string, ExclusionFileResult[]>();
+
+        result.data.results.forEach((fileResult: any) => {
+          if (fileResult.error) {
+            console.error(`[ExclusionCriteriaWorksheet] File ${fileResult.fileName} failed:`, fileResult.error);
+            return;
+          }
+
+          const resultList = fileResult.exclusion || [];
+
+          resultList.forEach((item: any) => {
+            if (!criteriaMap.has(item.id)) {
+              criteriaMap.set(item.id, []);
+            }
+            criteriaMap.get(item.id)!.push({
+              fileId: fileResult.filePath,
+              fileName: fileResult.fileName,
+              eligible: item.eligible,
+              reason: item.reason
+            });
+          });
         });
-        alert('资格分析完成！');
+
+        // Update each criteria with file results
+        let updateCount = 0;
+        criteriaMap.forEach((fileResults, criteriaId) => {
+          updateExclusionFileResults(criteriaId, fileResults);
+
+          // Also update single-file fields for backward compatibility (use first file result)
+          if (fileResults.length > 0) {
+            const firstFileResult = fileResults[0];
+            updateExclusionEligibility(criteriaId, firstFileResult.eligible, firstFileResult.reason);
+          }
+
+          updateCount++;
+        });
+
+        console.log('[ExclusionCriteriaWorksheet] Updated', updateCount, 'criteria with file results');
+        alert(`资格分析完成！已分析 ${completedSubjectFiles.length} 个文件，更新 ${updateCount} 条标准。`);
+        setShowMatrixView(true);
       } else {
         alert('分析失败：' + (result.error?.message || '未知错误'));
       }
@@ -115,9 +176,9 @@ export const ExclusionCriteriaWorksheet: React.FC = () => {
     if (eligible === undefined) {
       return null;
     }
-    // 对于排除标准：
-    // eligible = true 表示符合排除标准（应被排除）
-    // eligible = false 表示不符合排除标准（不被排除）
+    // For exclusion criteria:
+    // eligible = true means should be excluded (red badge)
+    // eligible = false means not excluded (green badge)
     return (
       <span className={`text-xs px-2 py-1 rounded-full font-medium ${
         eligible
@@ -137,6 +198,19 @@ export const ExclusionCriteriaWorksheet: React.FC = () => {
     acc[category].push(criteria);
     return acc;
   }, {} as Record<string, ExclusionCriteria[]>);
+
+  const hasAnalyzedData = exclusionCriteria.some(c => c.eligible !== undefined || (c.fileResults && c.fileResults.length > 0));
+
+  const handleClearEligibility = () => {
+    if (confirm('确定要清除所有分析结果吗？这将重置所有标准的资格状态。')) {
+      clearExclusionEligibility();
+      setShowMatrixView(false);
+    }
+  };
+
+  const completedSubjectFiles = subjectFiles.filter(f => f.status === 'completed');
+  const hasMultipleFiles = completedSubjectFiles.length > 1;
+  const hasFileResults = exclusionCriteria.some(c => c.fileResults && c.fileResults.length > 0);
 
   return (
     <div className="flex-1 flex flex-col bg-white overflow-hidden">
@@ -177,6 +251,30 @@ export const ExclusionCriteriaWorksheet: React.FC = () => {
               )}
             </button>
           )}
+          {hasAnalyzedData && (
+            <>
+              {(hasMultipleFiles || hasFileResults) && (
+                <button
+                  onClick={() => setShowMatrixView(!showMatrixView)}
+                  className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition-colors flex items-center space-x-2"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                  </svg>
+                  <span>{showMatrixView ? '列表视图' : '矩阵视图'}</span>
+                </button>
+              )}
+              <button
+                onClick={handleClearEligibility}
+                className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors flex items-center space-x-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                <span>清除分析结果</span>
+              </button>
+            </>
+          )}
           <button
             onClick={() => setIsAdding(true)}
             className="px-4 py-2 bg-primary-500 text-white rounded-lg hover:bg-primary-600 transition-colors flex items-center space-x-2"
@@ -191,7 +289,13 @@ export const ExclusionCriteriaWorksheet: React.FC = () => {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
-        {exclusionCriteria.length === 0 ? (
+        {showMatrixView && hasAnalyzedData ? (
+          <EligibilityMatrix
+            criteria={exclusionCriteria}
+            subjectFiles={subjectFiles}
+            isInclusion={false}
+          />
+        ) : exclusionCriteria.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-400">
             <svg className="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />

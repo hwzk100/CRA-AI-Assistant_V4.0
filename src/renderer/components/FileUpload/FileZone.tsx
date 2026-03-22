@@ -22,7 +22,6 @@ export const FileZone: React.FC<FileZoneProps> = ({
   acceptedTypes,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const { addFile, updateFileStatus, setProtocolFiles, setSubjectFiles, removeFile } = useStore();
 
@@ -57,8 +56,9 @@ export const FileZone: React.FC<FileZoneProps> = ({
         path: (file as any).path || file.name,
         size: file.size,
         type: file.type.includes('pdf') ? FileType.PDF : FileType.IMAGE,
-        status: FileStatus.PENDING,
+        status: FileStatus.COMPLETED,
         uploadedAt: new Date(),
+        processedAt: new Date(),
       };
       console.log('File info created:', fileInfo);
 
@@ -189,23 +189,6 @@ export const FileZone: React.FC<FileZoneProps> = ({
     }
   };
 
-  // 开始分析所有待处理的文件
-  const handleStartAnalysis = async () => {
-    const pendingFiles = files.filter(f => f.status === FileStatus.PENDING);
-    if (pendingFiles.length === 0) {
-      return;
-    }
-
-    setIsAnalyzing(true);
-
-    // 顺序处理文件
-    for (const file of pendingFiles) {
-      await processSingleFile(file);
-    }
-
-    setIsAnalyzing(false);
-  };
-
   const getFileIcon = (type: FileType): string => {
     switch (type) {
       case FileType.PDF:
@@ -270,8 +253,6 @@ export const FileZone: React.FC<FileZoneProps> = ({
     }
   }, [zone]);
 
-  const pendingCount = files.filter(f => f.status === FileStatus.PENDING).length;
-  const hasPendingFiles = pendingCount > 0;
   const isProcessing = files.some(f => f.status === FileStatus.PROCESSING);
 
   return (
@@ -311,39 +292,6 @@ export const FileZone: React.FC<FileZoneProps> = ({
           </div>
         </label>
       </div>
-
-      {/* Start Analysis Button */}
-      {hasPendingFiles && (
-        <button
-          onClick={handleStartAnalysis}
-          disabled={isAnalyzing || isProcessing}
-          className={`
-            mt-4 w-full py-3 px-4 rounded-lg font-medium transition-all
-            ${isAnalyzing || isProcessing
-              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-              : 'bg-green-500 text-white hover:bg-green-600 shadow-md hover:shadow-lg'
-            }
-          `}
-        >
-          {isAnalyzing || isProcessing ? (
-            <span className="flex items-center justify-center">
-              <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              分析中... ({pendingCount} 个文件)
-            </span>
-          ) : (
-            <span className="flex items-center justify-center">
-              <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              开始分析 ({pendingCount} 个待处理文件)
-            </span>
-          )}
-        </button>
-      )}
 
       {/* File List */}
       <div className="flex-1 mt-4 overflow-y-auto">
@@ -388,22 +336,20 @@ export const FileZone: React.FC<FileZoneProps> = ({
                   <span className={`text-xs px-2 py-1 rounded-full font-medium ${getStatusColor(file.status)}`}>
                     {getStatusText(file.status)}
                   </span>
-                  {file.status === FileStatus.PENDING && (
-                    <button
-                      onClick={() => {
-                        removeFile(zone, file.id);
-                        if (fileInputRef.current) {
-                          fileInputRef.current.value = '';
-                        }
-                      }}
-                      className="text-gray-400 hover:text-red-500 transition-colors p-1"
-                      title="删除文件"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  )}
+                  <button
+                    onClick={() => {
+                      removeFile(zone, file.id);
+                      if (fileInputRef.current) {
+                        fileInputRef.current.value = '';
+                      }
+                    }}
+                    className="text-gray-400 hover:text-red-500 transition-colors p-1"
+                    title="删除文件"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </div>
               </div>
             ))}

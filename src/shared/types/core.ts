@@ -34,6 +34,11 @@ export enum ErrorCode {
   API_KEY_MISSING = 'API_KEY_MISSING',
   API_KEY_INVALID = 'API_KEY_INVALID',
 
+  // PDF processing errors
+  PDF_CONVERSION_ERROR = 'PDF_CONVERSION_ERROR',
+  PDF_SCAN_DETECTION_FAILED = 'PDF_SCAN_DETECTION_FAILED',
+  PDF_IMAGE_EXTRACTION_FAILED = 'PDF_IMAGE_EXTRACTION_FAILED',
+
   // Storage errors
   STORAGE_ERROR = 'STORAGE_ERROR',
   STORAGE_QUOTA_EXCEEDED = 'STORAGE_QUOTA_EXCEEDED',
@@ -259,14 +264,29 @@ export interface ExtractSubjectDataResult extends SubjectDemographics {}
 // Worksheet Base Types
 // ============================================================================
 
+export interface InclusionFileResult {
+  fileId: string;
+  fileName: string;
+  eligible: boolean;
+  reason: string;
+}
+
 export interface InclusionCriteria {
   id: string;
   category: string;
   description: string;
   eligible?: boolean; // 是否符合此标准
   reason?: string; // 符合或不符合的原因
+  fileResults?: InclusionFileResult[]; // 多文件分析结果
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface ExclusionFileResult {
+  fileId: string;
+  fileName: string;
+  eligible: boolean;
+  reason: string;
 }
 
 export interface ExclusionCriteria {
@@ -275,6 +295,7 @@ export interface ExclusionCriteria {
   description: string;
   eligible?: boolean; // 是否符合此标准（对于排除标准，true 表示不排除）
   reason?: string; // 符合或不符合的原因
+  fileResults?: ExclusionFileResult[]; // 多文件分析结果
   createdAt: Date;
   updatedAt: Date;
 }

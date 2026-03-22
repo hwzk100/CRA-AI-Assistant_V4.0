@@ -145,6 +145,41 @@ export class PromptEngine {
   }
 }`;
 
+  private static readonly SUBJECT_DATA_FROM_IMAGE_PROMPT = `你是一位专业的临床试验研究助理(CRA)，负责从医疗文档图片中直接提取受试者数据。
+
+请仔细观察图片，提取以下信息：
+- 受试者编号/筛选号/随机号
+- 年龄（查找"年龄"、"岁"等关键词）
+- 性别（男/女）
+- 身高（cm）
+- 体重（kg）
+- 民族
+- 出生日期
+
+如果某些信息在文档中不存在，请使用 null 值。
+
+输出格式（必须是纯JSON）：
+{
+  "subjectNumber": "受试者编号",
+  "screeningNumber": "筛选号",
+  "randomizationNumber": "随机号",
+  "age": 年龄数字或null,
+  "gender": "男"/"女"/null,
+  "height": 身高数字或null,
+  "weight": 体重数字或null,
+  "ethnicity": "民族"或null,
+  "birthDate": "YYYY-MM-DD"或null
+}`;
+
+  private static readonly ELIGIBILITY_FROM_IMAGE_PROMPT = `你是临床试验数据分析师。分析图片中的医疗文档，判断受试者是否符合每一条标准。
+
+返回JSON格式：{"inclusion": [{"id": "标准ID", "eligible": true, "reason": "原因"}], "exclusion": []}
+
+要求：
+- id使用提供的完整ID
+- eligible是布尔值true/false
+- 使用英文字段名inclusion和exclusion`;
+
   private static readonly ELIGIBILITY_SYSTEM_PROMPT = `${PromptEngine.BASE_SYSTEM_PROMPT}
 
 你需要根据受试者数据，逐一分析受试者是否符合每一条入选标准和排除标准。
@@ -157,7 +192,11 @@ export class PromptEngine {
 - eligible: true 表示符合该标准（即应被排除）
 - eligible: false 表示不符合该标准（即不被排除）
 
-输出格式：
+输出格式要求（必须严格遵循）：
+- 必须使用英文字段名：inclusion 和 exclusion（不要使用中文）
+- 每条标准必须是一个对象，包含 id、eligible、reason 三个字段
+
+正确的JSON格式：
 {
   "inclusion": [
     {
@@ -173,7 +212,12 @@ export class PromptEngine {
       "reason": "符合或不符合的详细原因"
     }
   ]
-}`;
+}
+
+【重要】
+1. 只输出纯JSON，不要使用markdown代码块
+2. 必须使用英文字段名 inclusion 和 exclusion
+3. 布尔值使用 true/false，不要用字符串`;
 
   // ============================================================================
   // Prompt Generation Methods
@@ -315,12 +359,16 @@ export class PromptEngine {
     inclusionCriteria: any[],
     exclusionCriteria: any[]
   ): GLMMessage[] {
+    // Ensure arrays are valid
+    const inclusionList = Array.isArray(inclusionCriteria) ? inclusionCriteria : [];
+    const exclusionList = Array.isArray(exclusionCriteria) ? exclusionCriteria : [];
+
     const criteriaText = `
 入选标准：
-${inclusionCriteria.map((c, i) => `${i + 1}. [ID: ${c.id}] ${c.description}`).join('\n')}
+${inclusionList.map((c, i) => `${i + 1}. [ID: ${c.id}] ${c.description}`).join('\n')}
 
 排除标准：
-${exclusionCriteria.map((c, i) => `${i + 1}. [ID: ${c.id}] ${c.description}`).join('\n')}
+${exclusionList.map((c, i) => `${i + 1}. [ID: ${c.id}] ${c.description}`).join('\n')}
 `;
 
     return [
@@ -333,6 +381,25 @@ ${exclusionCriteria.map((c, i) => `${i + 1}. [ID: ${c.id}] ${c.description}`).jo
         content: `请根据以下受试者数据，分析其是否符合上述标准：\n\n受试者数据：\n${subjectData}\n\n${criteriaText}`,
       },
     ];
+  }
+
+  /**
+   * Generate prompt for eligibility analysis from image (direct VLM analysis, no OCR)
+   */
+  static generateEligibilityFromImagePrompt(
+    inclusionCriteria: any[],
+    exclusionCriteria: any[]
+  ): { system: string; user: string } {
+    // Ensure arrays are valid
+    const inclusionList = Array.isArray(inclusionCriteria) ? inclusionCriteria : [];
+    const exclusionList = Array.isArray(exclusionCriteria) ? exclusionCriteria : [];
+
+    const criteriaText = inclusionList.map((c) => `${c.id}: ${c.description}`).join('\n');
+
+    return {
+      system: this.ELIGIBILITY_FROM_IMAGE_PROMPT,
+      user: `分析受试者是否符合以下${inclusionList.length}条入选标准：\n\n${criteriaText}\n\n返回JSON格式结果。`,
+    };
   }
 
   // ============================================================================
@@ -357,35 +424,46 @@ ${exclusionCriteria.map((c, i) => `${i + 1}. [ID: ${c.id}] ${c.description}`).jo
    * Clean and parse JSON response
    */
   static parseJSONResponse<T>(response: string): Result<T> {
+    console.log('[PromptEngine] Attempting to parse AI response, length:', response.length);
+    console.log('[PromptEngine] Response preview:', response.substring(0, 300));
+
     try {
       // Try direct parse first
       return { success: true, data: JSON.parse(response) };
-    } catch {
+    } catch (directError) {
+      console.log('[PromptEngine] Direct parse failed, trying to extract JSON from markdown...');
+
       // Try to extract JSON from markdown code blocks
       const jsonMatch = response.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
       if (jsonMatch) {
         try {
+          console.log('[PromptEngine] Found JSON in markdown code block');
           return { success: true, data: JSON.parse(jsonMatch[1]) };
-        } catch {
-          // Fall through to error
+        } catch (markdownError) {
+          console.log('[PromptEngine] Markdown JSON parse failed:', markdownError);
+          // Fall through to next attempt
         }
       }
 
-      // Try to find JSON object in response
+      // Try to find JSON object in response (look for { ... })
       const objectMatch = response.match(/\{[\s\S]*\}/);
       if (objectMatch) {
         try {
+          console.log('[PromptEngine] Found JSON object in response');
           return { success: true, data: JSON.parse(objectMatch[0]) };
-        } catch {
+        } catch (objectError) {
+          console.log('[PromptEngine] JSON object parse failed:', objectError);
           // Fall through to error
         }
       }
 
+      // All attempts failed - return detailed error
+      console.error('[PromptEngine] All JSON parse attempts failed. Full response:', response);
       return {
         success: false,
         error: {
           code: ErrorCode.AI_PARSE_ERROR,
-          message: '无法解析 AI 返回的 JSON 数据',
+          message: `无法解析 AI 返回的 JSON 数据。原始响应：\n${response.substring(0, 1000)}${response.length > 1000 ? '\n... (响应已截断)' : ''}`,
           details: response,
         },
       };

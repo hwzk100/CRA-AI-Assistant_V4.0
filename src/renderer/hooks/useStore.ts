@@ -15,6 +15,8 @@ import type {
   WorksheetType,
   FileStatus,
   SubjectDemographics,
+  InclusionFileResult,
+  ExclusionFileResult,
 } from '@shared/types';
 import { StorageZone } from '@shared/types';
 import { DEFAULT_SETTINGS, WORKSHEET_CONFIG } from '@shared/constants';
@@ -66,12 +68,17 @@ interface AppActions {
   updateInclusionCriteria: (id: string, updates: Partial<InclusionCriteria>) => void;
   removeInclusionCriteria: (id: string) => void;
   updateInclusionEligibility: (id: string, eligible: boolean, reason: string) => void;
+  updateInclusionFileResults: (criteriaId: string, fileResults: InclusionFileResult[]) => void;
+  clearInclusionEligibility: () => void;
 
   setExclusionCriteria: (criteria: ExclusionCriteria[]) => void;
   addExclusionCriteria: (criteria: ExclusionCriteria) => void;
   updateExclusionCriteria: (id: string, updates: Partial<ExclusionCriteria>) => void;
   removeExclusionCriteria: (id: string) => void;
   updateExclusionEligibility: (id: string, eligible: boolean, reason: string) => void;
+  updateExclusionFileResults: (criteriaId: string, fileResults: ExclusionFileResult[]) => void;
+  clearExclusionEligibility: () => void;
+  clearAllEligibility: () => void;
 
   setVisitSchedule: (schedule: VisitSchedule[]) => void;
   addVisitSchedule: (schedule: VisitSchedule) => void;
@@ -202,10 +209,24 @@ const useAppStore = create<AppStore>()(
           inclusionCriteria: state.inclusionCriteria.filter((c) => c.id !== id),
         })),
 
-      updateInclusionEligibility: (id, eligible, reason) =>
+      updateInclusionEligibility: (id, eligible, reason) => {
+        console.log('[Store] updateInclusionEligibility called:', { id, eligible, reason });
+        console.log('[Store] Available criteria IDs:', get().inclusionCriteria.map(c => c.id));
+        const matched = get().inclusionCriteria.some(c => c.id === id);
+        console.log('[Store] ID matched:', matched);
         set((state) => ({
           inclusionCriteria: state.inclusionCriteria.map((c) =>
             c.id === id ? { ...c, eligible, reason, updatedAt: new Date() } : c
+          ),
+        }));
+      },
+
+      updateInclusionFileResults: (criteriaId, fileResults) =>
+        set((state) => ({
+          inclusionCriteria: state.inclusionCriteria.map((c) =>
+            c.id === criteriaId
+              ? { ...c, fileResults, updatedAt: new Date() }
+              : c
           ),
         })),
 
@@ -233,6 +254,51 @@ const useAppStore = create<AppStore>()(
           exclusionCriteria: state.exclusionCriteria.map((c) =>
             c.id === id ? { ...c, eligible, reason, updatedAt: new Date() } : c
           ),
+        })),
+
+      updateExclusionFileResults: (criteriaId, fileResults) =>
+        set((state) => ({
+          exclusionCriteria: state.exclusionCriteria.map((c) =>
+            c.id === criteriaId
+              ? { ...c, fileResults, updatedAt: new Date() }
+              : c
+          ),
+        })),
+
+      clearInclusionEligibility: () =>
+        set((state) => ({
+          inclusionCriteria: state.inclusionCriteria.map((c) => ({
+            ...c,
+            eligible: undefined,
+            reason: undefined,
+            fileResults: undefined,
+          })),
+        })),
+
+      clearExclusionEligibility: () =>
+        set((state) => ({
+          exclusionCriteria: state.exclusionCriteria.map((c) => ({
+            ...c,
+            eligible: undefined,
+            reason: undefined,
+            fileResults: undefined,
+          })),
+        })),
+
+      clearAllEligibility: () =>
+        set((state) => ({
+          inclusionCriteria: state.inclusionCriteria.map((c) => ({
+            ...c,
+            eligible: undefined,
+            reason: undefined,
+            fileResults: undefined,
+          })),
+          exclusionCriteria: state.exclusionCriteria.map((c) => ({
+            ...c,
+            eligible: undefined,
+            reason: undefined,
+            fileResults: undefined,
+          })),
         })),
 
       setVisitSchedule: (schedule) => set({ visitSchedule: schedule }),
@@ -361,6 +427,17 @@ const useAppStore = create<AppStore>()(
         medications: state.medications,
         subjectDemographics: state.subjectDemographics,
       }),
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          const hasInclusionEligibility = state.inclusionCriteria.some(c => c.eligible !== undefined || c.fileResults !== undefined);
+          const hasExclusionEligibility = state.exclusionCriteria.some(c => c.eligible !== undefined || c.fileResults !== undefined);
+
+          if (hasInclusionEligibility || hasExclusionEligibility) {
+            console.log('[Store] Auto-clearing eligibility data on startup');
+            state.clearAllEligibility();
+          }
+        }
+      },
     }
   )
 );
@@ -384,3 +461,11 @@ export const useVisitSchedule = () => useAppStore((state) => state.visitSchedule
 export const useSubjectVisits = () => useAppStore((state) => state.subjectVisits);
 export const useMedications = () => useAppStore((state) => state.medications);
 export const useSubjectDemographics = () => useAppStore((state) => state.subjectDemographics);
+
+// Clear eligibility hooks
+export const useClearInclusionEligibility = () =>
+  useAppStore((state) => state.clearInclusionEligibility);
+export const useClearExclusionEligibility = () =>
+  useAppStore((state) => state.clearExclusionEligibility);
+export const useClearAllEligibility = () =>
+  useAppStore((state) => state.clearAllEligibility);

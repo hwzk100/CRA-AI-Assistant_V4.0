@@ -16,13 +16,36 @@ let mainWindow: BrowserWindow | null = null;
 function createWindow() {
   console.log('Creating main window...');
 
+  // Determine preload path
+  // In development, __dirname might be the project root due to webpack's __dirname: false
+  // We need to find the correct path to preload.js
+  let preloadPath: string;
+  if (isDev) {
+    // In development, try to find preload.js in dist/main
+    const possiblePaths = [
+      path.join(__dirname, 'dist', 'main', 'preload.js'),
+      path.join(__dirname, 'preload.js'),
+      path.join(process.cwd(), 'dist', 'main', 'preload.js'),
+    ];
+    preloadPath = possiblePaths.find(p => {
+      try {
+        return require('fs').existsSync(p);
+      } catch {
+        return false;
+      }
+    }) || path.join(__dirname, 'preload.js');
+    console.log('Using preload path:', preloadPath);
+  } else {
+    preloadPath = path.join(__dirname, 'preload.js');
+  }
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 1000,
     minHeight: 700,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: preloadPath,
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true,
@@ -85,15 +108,16 @@ function createWindow() {
 
 // App lifecycle
 app.whenReady().then(() => {
-  createWindow();
-
-  // Register IPC handlers
+  // Register IPC handlers FIRST, before creating window
   try {
     require('./ipc/handlers').registerIPCHandlers();
     console.log('IPC handlers registered successfully');
   } catch (error) {
     console.error('Failed to register IPC handlers:', error);
   }
+
+  // Create window after handlers are registered
+  createWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

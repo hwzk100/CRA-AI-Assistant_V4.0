@@ -5,12 +5,22 @@
 import React, { useState } from 'react';
 import { useInclusionCriteria, useStore, useSubjectFiles } from '../../hooks/useStore';
 import type { InclusionCriteria } from '@shared/types';
+import type { InclusionFileResult } from '@shared/types';
 import { generateId } from '@shared/types/worksheet';
+import { EligibilityMatrix } from './shared/EligibilityMatrix';
 
 export const InclusionCriteriaWorksheet: React.FC = () => {
   const inclusionCriteria = useInclusionCriteria();
   const subjectFiles = useSubjectFiles();
-  const { addInclusionCriteria, updateInclusionCriteria, removeInclusionCriteria, setInclusionCriteria, updateInclusionEligibility } = useStore();
+  const {
+    addInclusionCriteria,
+    updateInclusionCriteria,
+    removeInclusionCriteria,
+    setInclusionCriteria,
+    updateInclusionEligibility,
+    updateInclusionFileResults,
+    clearInclusionEligibility
+  } = useStore();
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{ category: string; description: string }>({
@@ -19,6 +29,12 @@ export const InclusionCriteriaWorksheet: React.FC = () => {
   });
   const [isAdding, setIsAdding] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [showMatrixView, setShowMatrixView] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState({
+    current: 0,
+    total: 0,
+    currentFile: ''
+  });
 
   // 分析受试者资格
   const handleAnalyzeEligibility = async () => {
@@ -27,35 +43,107 @@ export const InclusionCriteriaWorksheet: React.FC = () => {
       return;
     }
 
-    if (inclusionCriteria.length === 0) {
+    if (!inclusionCriteria || inclusionCriteria.length === 0) {
       alert('请先上传方案文档以提取入选标准');
       return;
     }
 
+    // Get all completed subject files
+    const completedSubjectFiles = subjectFiles.filter(f => f.status === 'completed');
+
+    if (completedSubjectFiles.length === 0) {
+      alert('请先等待受试者文件处理完成');
+      return;
+    }
+
     setIsAnalyzing(true);
+    setAnalysisProgress({
+      current: 0,
+      total: completedSubjectFiles.length,
+      currentFile: ''
+    });
 
     try {
-      // 获取受试者数据（从第一个已完成的受试者文件）
-      const completedSubjectFile = subjectFiles.find(f => f.status === 'completed');
-      if (!completedSubjectFile) {
-        alert('请先等待受试者文件处理完成');
-        setIsAnalyzing(false);
-        return;
-      }
+      // Prepare criteria data
+      const inclusionData = inclusionCriteria.map(c => ({ id: c.id, description: c.description }));
+      const exclusionData: any[] = []; // Exclusion criteria empty
 
-      // 调用 AI 分析资格
+      console.log('[InclusionCriteriaWorksheet] Analyzing eligibility with:', {
+        fileCount: completedSubjectFiles.length,
+        inclusionCount: inclusionData.length,
+        exclusionCount: exclusionData.length
+      });
+
+      // Prepare file paths
+      const filePaths = completedSubjectFiles.map(f => f.path);
+
+      // Call AI analysis
       const result = await window.electronAPI.analyzeEligibility(
-        completedSubjectFile.path, // 传递文件路径而不是空字符串
-        inclusionCriteria.map(c => ({ id: c.id, description: c.description })),
-        [] // 排除标准留空，因为这是入选标准工作表
+        filePaths,
+        inclusionData,
+        exclusionData
       );
 
-      if (result.success && result.data) {
-        // 更新入选标准的符合状态
-        result.data.inclusion.forEach((item: any) => {
-          updateInclusionEligibility(item.id, item.eligible, item.reason);
+      console.log('[InclusionCriteriaWorksheet] Analysis result:', result);
+
+      if (result.success && result.data?.results) {
+        // Log all criteria IDs for debugging
+        console.log('[InclusionCriteriaWorksheet] Current criteria IDs:', inclusionCriteria.map(c => c.id));
+
+        // Organize results by criteria ID
+        const criteriaMap = new Map<string, InclusionFileResult[]>();
+
+        result.data.results.forEach((fileResult: any) => {
+          if (fileResult.error) {
+            console.error(`[InclusionCriteriaWorksheet] File ${fileResult.fileName} failed:`, fileResult.error);
+            return;
+          }
+
+          const resultList = fileResult.inclusion || [];
+          console.log(`[InclusionCriteriaWorksheet] File ${fileResult.fileName} inclusion results:`, resultList.map((r: any) => ({ id: r.id, eligible: r.eligible })));
+
+          resultList.forEach((item: any) => {
+            console.log(`[InclusionCriteriaWorksheet] Processing item with ID: ${item.id}`);
+            if (!criteriaMap.has(item.id)) {
+              criteriaMap.set(item.id, []);
+            }
+            criteriaMap.get(item.id)!.push({
+              fileId: fileResult.filePath,
+              fileName: fileResult.fileName,
+              eligible: item.eligible,
+              reason: item.reason
+            });
+          });
         });
-        alert('资格分析完成！');
+
+        console.log('[InclusionCriteriaWorksheet] Criteria map keys:', Array.from(criteriaMap.keys()));
+        console.log('[InclusionCriteriaWorksheet] Expected criteria IDs:', inclusionCriteria.map(c => c.id));
+
+        // Check for ID mismatches
+        const returnedIds = Array.from(criteriaMap.keys());
+        const expectedIds = inclusionCriteria.map(c => c.id);
+        const unmatchedIds = returnedIds.filter(id => !expectedIds.includes(id));
+        if (unmatchedIds.length > 0) {
+          console.warn('[InclusionCriteriaWorksheet] Unmatched IDs returned by AI:', unmatchedIds);
+        }
+
+        // Update each criteria with file results
+        let updateCount = 0;
+        criteriaMap.forEach((fileResults, criteriaId) => {
+          updateInclusionFileResults(criteriaId, fileResults);
+
+          // Also update single-file fields for backward compatibility (use first file result)
+          if (fileResults.length > 0) {
+            const firstFileResult = fileResults[0];
+            updateInclusionEligibility(criteriaId, firstFileResult.eligible, firstFileResult.reason);
+          }
+
+          updateCount++;
+        });
+
+        console.log('[InclusionCriteriaWorksheet] Updated', updateCount, 'criteria with file results');
+        alert(`资格分析完成！已分析 ${completedSubjectFiles.length} 个文件，更新 ${updateCount} 条标准。`);
+        setShowMatrixView(true);
       } else {
         alert('分析失败：' + (result.error?.message || '未知错误'));
       }
@@ -64,6 +152,7 @@ export const InclusionCriteriaWorksheet: React.FC = () => {
       alert('分析失败：' + (error instanceof Error ? error.message : '未知错误'));
     } finally {
       setIsAnalyzing(false);
+      setAnalysisProgress({ current: 0, total: 0, currentFile: '' });
     }
   };
 
@@ -135,7 +224,18 @@ export const InclusionCriteriaWorksheet: React.FC = () => {
     return acc;
   }, {} as Record<string, InclusionCriteria[]>);
 
-  const hasAnalyzedData = inclusionCriteria.some(c => c.eligible !== undefined);
+  const hasAnalyzedData = inclusionCriteria.some(c => c.eligible !== undefined || (c.fileResults && c.fileResults.length > 0));
+
+  const handleClearEligibility = () => {
+    if (confirm('确定要清除所有分析结果吗？这将重置所有标准的资格状态。')) {
+      clearInclusionEligibility();
+      setShowMatrixView(false);
+    }
+  };
+
+  const completedSubjectFiles = subjectFiles.filter(f => f.status === 'completed');
+  const hasMultipleFiles = completedSubjectFiles.length > 1;
+  const hasFileResults = inclusionCriteria.some(c => c.fileResults && c.fileResults.length > 0);
 
   return (
     <div className="flex-1 flex flex-col bg-white overflow-hidden">
@@ -176,6 +276,30 @@ export const InclusionCriteriaWorksheet: React.FC = () => {
               )}
             </button>
           )}
+          {hasAnalyzedData && (
+            <>
+              {(hasMultipleFiles || hasFileResults) && (
+                <button
+                  onClick={() => setShowMatrixView(!showMatrixView)}
+                  className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition-colors flex items-center space-x-2"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                  </svg>
+                  <span>{showMatrixView ? '列表视图' : '矩阵视图'}</span>
+                </button>
+              )}
+              <button
+                onClick={handleClearEligibility}
+                className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors flex items-center space-x-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                <span>清除分析结果</span>
+              </button>
+            </>
+          )}
           <button
             onClick={() => setIsAdding(true)}
             className="px-4 py-2 bg-primary-500 text-white rounded-lg hover:bg-primary-600 transition-colors flex items-center space-x-2"
@@ -190,7 +314,13 @@ export const InclusionCriteriaWorksheet: React.FC = () => {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
-        {inclusionCriteria.length === 0 ? (
+        {showMatrixView && hasAnalyzedData ? (
+          <EligibilityMatrix
+            criteria={inclusionCriteria}
+            subjectFiles={subjectFiles}
+            isInclusion={true}
+          />
+        ) : inclusionCriteria.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-400">
             <svg className="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />

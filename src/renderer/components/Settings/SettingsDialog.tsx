@@ -148,7 +148,7 @@ export const SettingsDialog: React.FC<SettingsDialogProps> = ({ isOpen, onClose 
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 >
                   <option value="glm-4">GLM-4 (文本处理)</option>
-                  <option value="glm-4v">GLM-4V (支持图片)</option>
+                  <option value="glm-4.6v-flash">GLM-4.6V-Flash (免费视觉模型)</option>
                 </select>
               </div>
             </div>
