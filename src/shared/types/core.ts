@@ -215,7 +215,7 @@ export interface AppSettings {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  apiKey: 'aae27120ea1b408a8555c693ad48d0d0.RsaY4z3BIYwK3OHC', // 智谱 AI 默认 API Key
+  apiKey: '07b90939b67f4170bc77dc79038bff91.DAZoHzF7duEhH3NM', // 智谱 AI 默认 API Key
   apiEndpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
   modelName: 'glm-4',
   storagePath: '',

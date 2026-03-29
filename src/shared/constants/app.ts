@@ -258,4 +258,11 @@ export const PDF_CONFIG = {
   MEANINGFUL_CHAR_RATIO: 0.3,        // Min ratio of meaningful chars
   TEMP_DIR: 'cra-ai-pdf-cache',      // Temp directory for images
   IMAGE_SCALE: 2.0,                   // Scale factor for PDF to image conversion
+
+  // Batch processing configuration
+  BATCH_TEXT_CHUNK_TOKENS: 6000,      // Text chunk size per batch (in tokens)
+  BATCH_TEXT_OVERLAP_TOKENS: 500,     // Overlap between chunks (in tokens)
+  BATCH_IMAGES_PER_BATCH: 5,         // Scanned PDF images per batch
+  BATCH_AI_MAX_TOKENS: 8192,         // AI response max_tokens for batch calls
+  BATCH_LARGE_FILE_THRESHOLD: 16000, // Character count threshold to enable batching
 } as const;

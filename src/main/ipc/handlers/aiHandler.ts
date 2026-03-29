@@ -2,11 +2,14 @@
  * CRA AI Assistant - AI IPC Handlers
  */
 
-import { ipcMain } from 'electron';
+import { ipcMain, IpcMainInvokeEvent } from 'electron';
 import { getGLMService } from '../../services/AI/GLMService';
+import { BatchProcessor } from '../../services/AI/BatchProcessor';
+import { ResultMerger } from '../../services/AI/ResultMerger';
 import type { Result } from '@shared/types';
 import { ErrorCode, createAppError, ok } from '@shared/types/core';
 import { getCurrentSettings } from './settingsHandler';
+import { PDF_CONFIG } from '@shared/constants/app';
 
 // Lazy load PDFProcessor to avoid pdfjs-dist loading during startup
 let pdfProcessorPromise: Promise<any> | null = null;
@@ -18,19 +21,13 @@ async function getPDFProcessor() {
   return pdfProcessorPromise;
 }
 
-// Cache for settings (will be populated when needed)
-let cachedSettings: { apiKey: string; modelName: string } | null = null;
-
-async function getSettings(): Promise<{ apiKey: string; modelName: string }> {
-  if (!cachedSettings) {
-    // Use the exported getCurrentSettings function
-    const settings = getCurrentSettings();
-    cachedSettings = {
-      apiKey: settings.apiKey,
-      modelName: settings.modelName,
-    };
-  }
-  return cachedSettings || { apiKey: '', modelName: 'glm-4' };
+// Settings are read fresh each time to avoid stale cache issues
+function getSettings(): { apiKey: string; modelName: string } {
+  const settings = getCurrentSettings();
+  return {
+    apiKey: settings.apiKey,
+    modelName: settings.modelName,
+  };
 }
 
 // PDF content cache to avoid re-reading files
@@ -74,6 +71,17 @@ function clearPDFContentCache(filePath?: string): void {
     pdfContentCache.delete(filePath);
   } else {
     pdfContentCache.clear();
+  }
+}
+
+/**
+ * Send progress event to renderer
+ */
+function sendProgress(event: IpcMainInvokeEvent, current: number, total: number, stage: string): void {
+  try {
+    event.sender.send('ai:progress', { current, total, stage });
+  } catch (e) {
+    // Ignore errors if window is already closed
   }
 }
 
@@ -135,11 +143,11 @@ export function registerAIHandlers(): void {
     } catch (error) {
       return {
         success: false,
-        error: {
-          code: 'AI_API_ERROR',
-          message: `GLM-4.6V-Flash 模型测试异常: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          details: error
-        }
+        error: createAppError(
+          ErrorCode.AI_API_ERROR,
+          `GLM-4.6V-Flash 模型测试异常: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          error
+        )
       };
     }
   });
@@ -147,7 +155,7 @@ export function registerAIHandlers(): void {
   // Extract criteria from PDF
   ipcMain.handle('ai:extractCriteria', async (event, fileId: string, pdfContent: string): Promise<Result<any>> => {
     try {
-      const settings = await getSettings();
+      const settings = getSettings();
       if (!settings.apiKey) {
         return {
           success: false,
@@ -171,7 +179,7 @@ export function registerAIHandlers(): void {
   // Extract visit schedule from PDF
   ipcMain.handle('ai:extractVisitSchedule', async (event, fileId: string, pdfContent: string): Promise<Result<any>> => {
     try {
-      const settings = await getSettings();
+      const settings = getSettings();
       if (!settings.apiKey) {
         return {
           success: false,
@@ -195,7 +203,7 @@ export function registerAIHandlers(): void {
   // Recognize medications
   ipcMain.handle('ai:recognizeMedications', async (event, fileId: string, content: string): Promise<Result<any>> => {
     try {
-      const settings = await getSettings();
+      const settings = getSettings();
       if (!settings.apiKey) {
         return {
           success: false,
@@ -219,7 +227,7 @@ export function registerAIHandlers(): void {
   // Extract subject number
   ipcMain.handle('ai:extractSubjectNumber', async (event, fileId: string, content: string): Promise<Result<any>> => {
     try {
-      const settings = await getSettings();
+      const settings = getSettings();
       if (!settings.apiKey) {
         return {
           success: false,
@@ -243,7 +251,7 @@ export function registerAIHandlers(): void {
   // Extract subject visit dates
   ipcMain.handle('ai:extractSubjectVisitDates', async (event, fileId: string, content: string): Promise<Result<any>> => {
     try {
-      const settings = await getSettings();
+      const settings = getSettings();
       if (!settings.apiKey) {
         return {
           success: false,
@@ -267,7 +275,7 @@ export function registerAIHandlers(): void {
   // Extract subject visit items
   ipcMain.handle('ai:extractSubjectVisitItems', async (event, fileId: string, content: string, visitType: string): Promise<Result<any>> => {
     try {
-      const settings = await getSettings();
+      const settings = getSettings();
       if (!settings.apiKey) {
         return {
           success: false,
@@ -291,7 +299,7 @@ export function registerAIHandlers(): void {
   // Extract from image
   ipcMain.handle('ai:extractFromImage', async (event, imagePath: string, prompt: string): Promise<Result<any>> => {
     try {
-      const settings = await getSettings();
+      const settings = getSettings();
       if (!settings.apiKey) {
         return {
           success: false,
@@ -315,7 +323,7 @@ export function registerAIHandlers(): void {
   // Process protocol file - extract both criteria and visit schedule
   ipcMain.handle('ai:processProtocolFile', async (event, fileId: string, filePath: string): Promise<Result<any>> => {
     try {
-      const settings = await getSettings();
+      const settings = getSettings();
       if (!settings.apiKey) {
         return {
           success: false,
@@ -331,77 +339,228 @@ export function registerAIHandlers(): void {
       if (pdfResult.type === 'text') {
         // Use extracted text directly
         combinedText = pdfResult.content;
-      } else {
-        // Scanned PDF - extract text from images using GLM-4V
-        console.log('[AI Handler] Processing scanned PDF with GLM-4V...');
 
-        const service = getGLMService({
+        // Validate we got some content
+        if (combinedText.trim().length < 50) {
+          return {
+            success: false,
+            error: createAppError(
+              ErrorCode.AI_INVALID_RESPONSE,
+              '无法从 PDF 中提取足够的文字内容。请确认文件格式正确。'
+            ),
+          };
+        }
+
+        // Check if we need batch processing for text PDFs
+        if (BatchProcessor.shouldBatch(combinedText)) {
+          console.log(`[AI Handler] Large text PDF (${combinedText.length} chars), using batch processing`);
+          sendProgress(event, 0, 2, '正在分批提取标准...');
+
+          // Batch extract criteria
+          const criteriaBatches = await BatchProcessor.processTextInBatches(
+            combinedText,
+            async (chunk, batchIdx, totalBatches) => {
+              sendProgress(event, batchIdx + 1, totalBatches * 2, `正在提取标准 (批次 ${batchIdx + 1}/${totalBatches})`);
+              const service = getGLMService({ apiKey: settings.apiKey, modelName: settings.modelName });
+              const result = await service.extractCriteria(fileId, chunk);
+              return result.success ? result.data : { inclusionCriteria: [], exclusionCriteria: [] };
+            }
+          );
+
+          sendProgress(event, 1, 2, '正在分批提取访视计划...');
+
+          // Batch extract visit schedule
+          const scheduleBatches = await BatchProcessor.processTextInBatches(
+            combinedText,
+            async (chunk, batchIdx, totalBatches) => {
+              sendProgress(event, totalBatches + batchIdx + 1, totalBatches * 2, `正在提取访视计划 (批次 ${batchIdx + 1}/${totalBatches})`);
+              const service = getGLMService({ apiKey: settings.apiKey, modelName: settings.modelName });
+              const result = await service.extractVisitSchedule(fileId, chunk);
+              return result.success ? result.data : { visits: [] };
+            }
+          );
+
+          // Merge results
+          const mergedCriteria = ResultMerger.mergeExtractCriteriaResults(criteriaBatches);
+          const mergedSchedule = ResultMerger.mergeVisitScheduleResults(scheduleBatches);
+
+          sendProgress(event, 2, 2, '处理完成');
+
+          return {
+            success: true,
+            data: {
+              criteria: mergedCriteria,
+              schedule: mergedSchedule,
+            },
+          };
+        }
+
+        // Small text PDF - single call (original behavior)
+        const service = getGLMService({ apiKey: settings.apiKey, modelName: settings.modelName });
+
+        const [criteriaResult, scheduleResult] = await Promise.all([
+          service.extractCriteria(fileId, combinedText),
+          service.extractVisitSchedule(fileId, combinedText),
+        ]);
+
+        if (!criteriaResult.success) {
+          return criteriaResult;
+        }
+
+        if (!scheduleResult.success) {
+          return scheduleResult;
+        }
+
+        return {
+          success: true,
+          data: {
+            criteria: criteriaResult.data,
+            schedule: scheduleResult.data,
+          },
+        };
+      } else {
+        // Scanned PDF
+        const pdfProcessor = await getPDFProcessor();
+        const totalPages = await pdfProcessor.getPDFPageCount(filePath);
+
+        if (BatchProcessor.shouldBatchScanned(totalPages)) {
+          console.log(`[AI Handler] Large scanned PDF (${totalPages} pages), using batch processing`);
+
+          // Use free vision model for OCR
+          const visionService = getGLMService({
+            apiKey: settings.apiKey,
+            modelName: 'glm-4.6v-flash'
+          });
+
+          // Batch process: convert to images → OCR each batch → collect text
+          sendProgress(event, 0, 1, '正在分批转换扫描PDF...');
+          const textBatches = await BatchProcessor.processScannedInBatches(
+            filePath,
+            pdfProcessor,
+            async (imagePaths, batchIdx, totalBatches) => {
+              sendProgress(event, batchIdx + 1, totalBatches, `正在OCR识别 (批次 ${batchIdx + 1}/${totalBatches})`);
+              const textParts: string[] = [];
+              for (const imagePath of imagePaths) {
+                const result = await visionService.extractFromImage(
+                  imagePath,
+                  '请提取图片中的所有文字内容，包括标题、正文、表格等所有可见文字。'
+                );
+                if (result.success && result.data.text) {
+                  textParts.push(result.data.text);
+                }
+              }
+              return textParts.join('\n\n');
+            },
+            (progress) => {
+              sendProgress(event, progress.current, progress.total, progress.stage);
+            }
+          );
+
+          combinedText = textBatches.filter(t => t.length > 0).join('\n\n');
+
+          // Clear cache after all batches
+          clearPDFContentCache(filePath);
+
+          if (combinedText.trim().length < 50) {
+            return {
+              success: false,
+              error: createAppError(
+                ErrorCode.AI_INVALID_RESPONSE,
+                '无法从 PDF 中提取足够的文字内容。请确认文件格式正确。'
+              ),
+            };
+          }
+
+          // Now batch-extract from the combined OCR text
+          sendProgress(event, 0, 2, '正在分批提取标准...');
+
+          const criteriaBatches = await BatchProcessor.processTextInBatches(
+            combinedText,
+            async (chunk, batchIdx, totalBatches) => {
+              const service = getGLMService({ apiKey: settings.apiKey, modelName: settings.modelName });
+              const result = await service.extractCriteria(fileId, chunk);
+              return result.success ? result.data : { inclusionCriteria: [], exclusionCriteria: [] };
+            }
+          );
+
+          const scheduleBatches = await BatchProcessor.processTextInBatches(
+            combinedText,
+            async (chunk, batchIdx, totalBatches) => {
+              const service = getGLMService({ apiKey: settings.apiKey, modelName: settings.modelName });
+              const result = await service.extractVisitSchedule(fileId, chunk);
+              return result.success ? result.data : { visits: [] };
+            }
+          );
+
+          const mergedCriteria = ResultMerger.mergeExtractCriteriaResults(criteriaBatches);
+          const mergedSchedule = ResultMerger.mergeVisitScheduleResults(scheduleBatches);
+
+          sendProgress(event, 2, 2, '处理完成');
+
+          return {
+            success: true,
+            data: {
+              criteria: mergedCriteria,
+              schedule: mergedSchedule,
+            },
+          };
+        }
+
+        // Small scanned PDF (≤10 pages) — original behavior
+        const visionService = getGLMService({
           apiKey: settings.apiKey,
-          modelName: 'glm-4.6v-flash' // Use free vision model
+          modelName: 'glm-4.6v-flash'
         });
 
         const textParts: string[] = [];
-
         for (const imagePath of (pdfResult.imagePaths || [])) {
-          console.log(`[AI Handler] Extracting text from ${imagePath}...`);
-
-          const result = await service.extractFromImage(
+          const result = await visionService.extractFromImage(
             imagePath,
             '请提取图片中的所有文字内容，包括标题、正文、表格等所有可见文字。'
           );
-
           if (result.success && result.data.text) {
             textParts.push(result.data.text);
-            console.log(`[AI Handler] Extracted ${result.data.text.length} chars from page`);
           }
         }
 
         combinedText = textParts.join('\n\n');
 
-        // Cleanup temporary images
-        console.log('[AI Handler] Cleaning up temporary images...');
-        const pdfProcessor = await getPDFProcessor();
         await pdfProcessor.cleanupImages(pdfResult.imagePaths || []);
-
-        // Clear cache after cleanup to prevent stale file references
         clearPDFContentCache(filePath);
-      }
 
-      // Validate we got some content
-      if (combinedText.trim().length < 50) {
+        if (combinedText.trim().length < 50) {
+          return {
+            success: false,
+            error: createAppError(
+              ErrorCode.AI_INVALID_RESPONSE,
+              '无法从 PDF 中提取足够的文字内容。请确认文件格式正确。'
+            ),
+          };
+        }
+
+        const service = getGLMService({ apiKey: settings.apiKey, modelName: settings.modelName });
+
+        const [criteriaResult, scheduleResult] = await Promise.all([
+          service.extractCriteria(fileId, combinedText),
+          service.extractVisitSchedule(fileId, combinedText),
+        ]);
+
+        if (!criteriaResult.success) {
+          return criteriaResult;
+        }
+
+        if (!scheduleResult.success) {
+          return scheduleResult;
+        }
+
         return {
-          success: false,
-          error: createAppError(
-            ErrorCode.AI_INVALID_RESPONSE,
-            '无法从 PDF 中提取足够的文字内容。请确认文件格式正确。'
-          ),
+          success: true,
+          data: {
+            criteria: criteriaResult.data,
+            schedule: scheduleResult.data,
+          },
         };
       }
-
-      // Get AI service
-      const service = getGLMService({ apiKey: settings.apiKey, modelName: settings.modelName });
-
-      // Extract criteria and visit schedule in parallel
-      const [criteriaResult, scheduleResult] = await Promise.all([
-        service.extractCriteria(fileId, combinedText),
-        service.extractVisitSchedule(fileId, combinedText),
-      ]);
-
-      if (!criteriaResult.success) {
-        return criteriaResult;
-      }
-
-      if (!scheduleResult.success) {
-        return scheduleResult;
-      }
-
-      return {
-        success: true,
-        data: {
-          criteria: criteriaResult.data,
-          schedule: scheduleResult.data,
-        },
-      };
     } catch (error) {
       return {
         success: false,
@@ -416,7 +575,7 @@ export function registerAIHandlers(): void {
   // Process subject file - extract subject data
   ipcMain.handle('ai:processSubjectFile', async (event, fileId: string, filePath: string): Promise<Result<any>> => {
     try {
-      const settings = await getSettings();
+      const settings = getSettings();
       if (!settings.apiKey) {
         return {
           success: false,
@@ -429,63 +588,213 @@ export function registerAIHandlers(): void {
       let imagePaths: string[] | undefined;
 
       if (filePath.toLowerCase().endsWith('.pdf')) {
-        console.log('[AI Handler] Reading PDF from path:', filePath);
         const pdfResult = await readPDFContent(filePath);
-        console.log('[AI Handler] PDF type:', pdfResult.type);
 
         if (pdfResult.type === 'text') {
           content = pdfResult.content;
         } else {
           // Scanned PDF - analyze directly with GLM-4V (no OCR step)
-          console.log('[AI Handler] Processing scanned PDF with direct VLM analysis...');
+          const pdfProcessor = await getPDFProcessor();
+          const totalPages = await pdfProcessor.getPDFPageCount(filePath);
 
-          const service = getGLMService({
-            apiKey: settings.apiKey,
-            modelName: 'glm-4v' // Use vision model
-          });
+          if (BatchProcessor.shouldBatchScanned(totalPages)) {
+            // Large scanned PDF: process all pages in batches
+            console.log(`[AI Handler] Large scanned subject PDF (${totalPages} pages), using batch processing`);
+            sendProgress(event, 0, 1, '正在分批处理扫描PDF...');
 
-          // Use the first page for direct analysis
-          const firstPageImage = pdfResult.imagePaths?.[0];
-          if (!firstPageImage) {
-            await (await getPDFProcessor()).cleanupImages(pdfResult.imagePaths || []);
+            const visionService = getGLMService({
+              apiKey: settings.apiKey,
+              modelName: 'glm-4.6v-flash'
+            });
+
+            // Process all pages: collect subject data from each batch
+            const subjectDataBatches = await BatchProcessor.processScannedInBatches(
+              filePath,
+              pdfProcessor,
+              async (batchImagePaths, batchIdx, totalBatches) => {
+                sendProgress(event, batchIdx + 1, totalBatches, `正在分析受试者数据 (批次 ${batchIdx + 1}/${totalBatches})`);
+
+                // Extract subject data from each image in this batch
+                const batchSubjects: any[] = [];
+                for (const imagePath of batchImagePaths) {
+                  try {
+                    const result = await visionService.extractSubjectDataFromImage(imagePath);
+                    if (result.success) {
+                      batchSubjects.push(result.data);
+                    }
+                  } catch (e) {
+                    console.error('[AI Handler] Failed to extract from page:', e);
+                  }
+                }
+                return batchSubjects;
+              },
+              (progress) => {
+                sendProgress(event, progress.current, progress.total, progress.stage);
+              }
+            );
+
+            // Merge subject data from all batches
+            const allSubjects = subjectDataBatches.flat();
+            const mergedSubject = allSubjects.length > 0
+              ? ResultMerger.mergeSubjectData(allSubjects)
+              : {};
+
+            // Also extract medications and visit dates from all pages
+            const medicationService = getGLMService({ apiKey: settings.apiKey, modelName: settings.modelName });
+            let mergedMedications: any[] = [];
+            let mergedVisits: any[] = [];
+
+            // For medication/visit extraction, we need OCR text from all pages
+            // Re-process first batch to get OCR text
+            const visionService2 = getGLMService({
+              apiKey: settings.apiKey,
+              modelName: 'glm-4.6v-flash'
+            });
+
+            const textBatches = await BatchProcessor.processScannedInBatches(
+              filePath,
+              pdfProcessor,
+              async (batchImagePaths) => {
+                const textParts: string[] = [];
+                for (const imagePath of batchImagePaths) {
+                  try {
+                    const result = await visionService2.extractFromImage(
+                      imagePath,
+                      '请提取图片中的所有文字内容，包括标题、正文、表格等所有可见文字。'
+                    );
+                    if (result.success && result.data.text) {
+                      textParts.push(result.data.text);
+                    }
+                  } catch (e) {
+                    console.error('[AI Handler] OCR failed for page:', e);
+                  }
+                }
+                return textParts.join('\n\n');
+              }
+            );
+
+            const fullText = textBatches.filter(t => t.length > 0).join('\n\n');
+
+            if (fullText.length > 10) {
+              // Extract medications from full text
+              const medResult = await medicationService.recognizeMedications(fileId, fullText);
+              if (medResult.success) {
+                mergedMedications = medResult.data;
+              }
+
+              // Extract visit dates from full text
+              const visitResult = await medicationService.extractSubjectVisitDates(fileId, fullText);
+              if (visitResult.success && visitResult.data) {
+                mergedVisits = visitResult.data.visits || [];
+              }
+            }
+
+            clearPDFContentCache(filePath);
+
+            sendProgress(event, 1, 1, '处理完成');
+
             return {
-              success: false,
-              error: createAppError(ErrorCode.AI_INVALID_RESPONSE, '无法获取PDF页面图片'),
+              success: true,
+              data: {
+                subject: mergedSubject,
+                demographics: mergedSubject,
+                visitDates: { visits: mergedVisits },
+                medications: mergedMedications,
+              },
             };
           }
 
-          console.log(`[AI Handler] Analyzing first page directly: ${firstPageImage}`);
+          // Small scanned PDF (≤10 pages) — original behavior, but use ALL pages
+          const service = getGLMService({
+            apiKey: settings.apiKey,
+            modelName: 'glm-4.6v-flash'
+          });
 
-          // Direct analysis from image (no OCR step)
-          const subjectResult = await service.extractSubjectDataFromImage(firstPageImage);
-          if (!subjectResult.success) {
-            await (await getPDFProcessor()).cleanupImages(pdfResult.imagePaths || []);
-            return subjectResult;
+          const allSubjectData: any[] = [];
+          const allImagePaths = pdfResult.imagePaths || [];
+
+          // Extract subject data from ALL pages
+          for (const imagePath of allImagePaths) {
+            try {
+              const subjectResult = await service.extractSubjectDataFromImage(imagePath);
+              if (subjectResult.success) {
+                allSubjectData.push(subjectResult.data);
+              }
+            } catch (e) {
+              console.error('[AI Handler] Failed to extract from page:', e);
+            }
           }
 
-          console.log('[AI Handler] Subject data extracted from image:', subjectResult.data);
+          // Merge data from all pages
+          const mergedSubject = allSubjectData.length > 0
+            ? ResultMerger.mergeSubjectData(allSubjectData)
+            : {};
 
           // Cleanup temporary images
-          console.log('[AI Handler] Cleaning up temporary images...');
-          await (await getPDFProcessor()).cleanupImages(pdfResult.imagePaths || []);
+          await pdfProcessor.cleanupImages(allImagePaths);
 
           // Clear cache after cleanup to prevent stale file references
           clearPDFContentCache(filePath);
 
-          // Return direct analysis result
+          // Extract visit dates and medications via OCR text if we have vision data
+          let visitDates: any = { visits: [] };
+          let medications: any[] = [];
+
+          if (allSubjectData.length > 0) {
+            // Try to get OCR text for visit dates and medications
+            const ocrService = getGLMService({ apiKey: settings.apiKey, modelName: settings.modelName });
+            const textParts: string[] = [];
+
+            // Re-convert and OCR for text extraction (small PDF, only do once)
+            const reconvertResult = await pdfProcessor.convertPDFToImages(filePath);
+            if (reconvertResult.success) {
+              const visionService = getGLMService({
+                apiKey: settings.apiKey,
+                modelName: 'glm-4.6v-flash'
+              });
+
+              for (const imagePath of reconvertResult.data) {
+                try {
+                  const result = await visionService.extractFromImage(
+                    imagePath,
+                    '请提取图片中的所有文字内容，包括标题、正文、表格等所有可见文字。'
+                  );
+                  if (result.success && result.data.text) {
+                    textParts.push(result.data.text);
+                  }
+                } catch (e) {
+                  console.error('[AI Handler] OCR failed:', e);
+                }
+              }
+
+              await pdfProcessor.cleanupImages(reconvertResult.data);
+            }
+
+            const fullText = textParts.join('\n\n');
+            if (fullText.length > 10) {
+              const visitResult = await ocrService.extractSubjectVisitDates(fileId, fullText);
+              if (visitResult.success) {
+                visitDates = visitResult.data;
+              }
+
+              const medResult = await ocrService.recognizeMedications(fileId, fullText);
+              if (medResult.success) {
+                medications = medResult.data;
+              }
+            }
+          }
+
+          // Return analysis result
           return {
             success: true,
             data: {
-              subject: subjectResult.data,
-              demographics: subjectResult.data,
-              visitDates: { visits: [] }, // Empty for scanned PDF - requires separate analysis
-              medications: [], // Empty for scanned PDF - requires separate analysis
+              subject: mergedSubject,
+              demographics: mergedSubject,
+              visitDates,
+              medications,
             },
           };
         }
-
-        console.log('[AI Handler] Content length:', content.length);
-        console.log('[AI Handler] Content preview (first 500 chars):', content.substring(0, 500));
       } else {
         // For images, use AI to extract text first
         const service = getGLMService({ apiKey: settings.apiKey, modelName: settings.modelName });
@@ -511,10 +820,7 @@ export function registerAIHandlers(): void {
       const service = getGLMService({ apiKey: settings.apiKey, modelName: settings.modelName });
 
       // Extract subject data
-      console.log('[AI Handler] Extracting subject data from content length:', content.length);
-      console.log('[AI Handler] First 500 chars of content:', content.substring(0, 500));
       const subjectResult = await service.extractSubjectNumber(fileId, content);
-      console.log('[AI Handler] Subject result:', subjectResult);
       if (!subjectResult.success) {
         return subjectResult;
       }
@@ -552,21 +858,15 @@ export function registerAIHandlers(): void {
   // Analyze subject eligibility against criteria
   ipcMain.handle('ai:analyzeEligibility', async (event, subjectFilePaths: string[], inclusionCriteria: any[], exclusionCriteria: any[]): Promise<Result<any>> => {
     try {
-      console.log('[AI Handler] analyzeEligibility called with:', {
-        subjectFilePaths: subjectFilePaths?.length || 0,
-        inclusionCriteria: inclusionCriteria?.length || 0,
-        exclusionCriteria: exclusionCriteria?.length || 0
-      });
-
       // Validate file paths
       if (!subjectFilePaths || !Array.isArray(subjectFilePaths) || subjectFilePaths.length === 0) {
         return {
           success: false,
-          error: createAppError(ErrorCode.INVALID_PARAMS, '受试者文件路径不能为空'),
+          error: createAppError(ErrorCode.VALIDATION_ERROR, '受试者文件路径不能为空'),
         };
       }
 
-      const settings = await getSettings();
+      const settings = getSettings();
       if (!settings.apiKey) {
         return {
           success: false,
@@ -588,10 +888,6 @@ export function registerAIHandlers(): void {
           error: createAppError(ErrorCode.AI_INVALID_RESPONSE, '排除标准数据无效'),
         };
       }
-
-      // Log original criteria IDs for debugging
-      console.log('[AI Handler] Original inclusion criteria IDs:', inclusionCriteria.map(c => c.id));
-      console.log('[AI Handler] Original exclusion criteria IDs:', exclusionCriteria.map(c => c.id));
 
       // Create ID maps for inclusion and exclusion criteria
       const createIdMap = (criteria: any[]) => {
@@ -675,12 +971,8 @@ export function registerAIHandlers(): void {
         idMap: Map<string, any>,
         criteriaArray?: any[]
       ): string => {
-        console.log(`[AI Handler] normalizeId called with: ${aiId}`);
-        console.log(`[AI Handler] idMap keys:`, Array.from(idMap.keys()));
-
         // Layer 1: Direct ID match
         if (idMap.has(aiId)) {
-          console.log(`[AI Handler] Direct match found for: ${aiId}`);
           return idMap.get(aiId)!.id;
         }
 
@@ -691,10 +983,8 @@ export function registerAIHandlers(): void {
           .replace(/\[/g, '')
           .replace(/\]/g, '')
           .trim();
-        console.log(`[AI Handler] Cleaned ID: ${cleanId}`);
 
         if (idMap.has(cleanId)) {
-          console.log(`[AI Handler] Cleaned ID match found for: ${cleanId}`);
           return idMap.get(cleanId)!.id;
         }
 
@@ -703,7 +993,6 @@ export function registerAIHandlers(): void {
           const numericIndex = parseInt(aiId);
           if (!isNaN(numericIndex) && numericIndex > 0 && numericIndex <= criteriaArray.length) {
             const matchedCriteria = criteriaArray[numericIndex - 1];
-            console.log(`[AI Handler] Numeric index match: ${aiId} -> ${matchedCriteria.id}`);
             return matchedCriteria.id;
           }
         }
@@ -712,7 +1001,6 @@ export function registerAIHandlers(): void {
         if (criteriaArray && criteriaArray.length > 0) {
           const bestMatch = findCriteriaByDescription(aiId, criteriaArray);
           if (bestMatch && bestMatch.similarity > 0.85) {
-            console.log(`[AI Handler] Description match: ${aiId} -> ${bestMatch.criteria.id} (similarity: ${bestMatch.similarity.toFixed(3)})`);
             return bestMatch.criteria.id;
           }
         }
@@ -723,26 +1011,17 @@ export function registerAIHandlers(): void {
 
       // Process all files
       const results = [];
-      const path = require('path');
-
-      console.log(`[AI Handler] ========== Starting multi-file eligibility analysis ==========`);
-      console.log(`[AI Handler] Total files to process: ${subjectFilePaths.length}`);
-      subjectFilePaths.forEach((fp, i) => {
-        console.log(`[AI Handler] File ${i + 1}: ${path.basename(fp)}`);
-      });
-      console.log(`[AI Handler] Inclusion criteria: ${inclusionCriteria.length}, Exclusion criteria: ${exclusionCriteria.length}`);
+      const path = await import('path');
 
       for (let i = 0; i < subjectFilePaths.length; i++) {
         const filePath = subjectFilePaths[i];
         const fileName = path.basename(filePath);
 
-        console.log(`[AI Handler] Processing file ${i + 1}/${subjectFilePaths.length}:`, fileName);
-
         try {
           // Read subject file content
           let isScannedPDF = false;
           let imagePaths: string[] | undefined;
-          let subjectData: string;
+          let subjectData = ''; // Initialize to prevent "used before assignment" error
 
           if (filePath.toLowerCase().endsWith('.pdf')) {
             const pdfResult = await readPDFContent(filePath);
@@ -765,19 +1044,42 @@ export function registerAIHandlers(): void {
           let result;
 
           if (isScannedPDF && imagePaths && imagePaths.length > 0) {
-            // Direct analysis from image (no OCR step)
-            console.log('[AI Handler] Analyzing eligibility from image directly...');
-            const firstPageImage = imagePaths[0];
-
+            // Analyze ALL pages for eligibility
             try {
-              result = await service.analyzeEligibilityFromImage(
-                firstPageImage,
-                inclusionCriteria,
-                exclusionCriteria
-              );
-              console.log('[AI Handler] Analysis result received:', result.success ? 'SUCCESS' : 'FAILED');
-              if (!result.success) {
-                console.log('[AI Handler] Analysis error:', result.error);
+              // Process each page individually and merge results
+              const eligibilityBatches: Array<{
+                inclusion: Array<{ id: string; eligible: boolean; reason: string }>;
+                exclusion: Array<{ id: string; eligible: boolean; reason: string }>;
+              }> = [];
+
+              for (let pageIdx = 0; pageIdx < imagePaths.length; pageIdx++) {
+                const pageImage = imagePaths[pageIdx];
+                try {
+                  const pageResult = await service.analyzeEligibilityFromImage(
+                    pageImage,
+                    inclusionCriteria,
+                    exclusionCriteria
+                  );
+                  if (pageResult.success && pageResult.data) {
+                    eligibilityBatches.push(pageResult.data);
+                  }
+                } catch (pageError) {
+                  console.error(`[AI Handler] Failed to analyze page ${pageIdx + 1}:`, pageError);
+                }
+              }
+
+              if (eligibilityBatches.length === 0) {
+                result = {
+                  success: false,
+                  error: createAppError(ErrorCode.AI_API_ERROR, '所有页面的分析均失败')
+                };
+              } else if (eligibilityBatches.length === 1) {
+                // Single page result, no need to merge
+                result = { success: true, data: eligibilityBatches[0] };
+              } else {
+                // Merge results from multiple pages
+                const merged = ResultMerger.mergeEligibilityResults(eligibilityBatches);
+                result = { success: true, data: merged };
               }
             } catch (apiError) {
               console.error('[AI Handler] API call threw exception:', apiError);
@@ -811,8 +1113,6 @@ export function registerAIHandlers(): void {
             });
             continue;
           }
-
-          console.log(`[AI Handler] File ${fileName} analysis successful, processing results...`);
 
           // Normalize IDs in the result
           if (result.data) {
@@ -849,14 +1149,10 @@ export function registerAIHandlers(): void {
         }
       }
 
-      console.log(`[AI Handler] All files processed. Total results: ${results.length}, Successful: ${results.filter(r => !r.error).length}, Failed: ${results.filter(r => r.error).length}`);
-
-      // Log summary of results
-      results.forEach((r, i) => {
+      // Log errors from failed results
+      results.forEach((r) => {
         if (r.error) {
-          console.error(`[AI Handler] Result ${i + 1}: ${r.fileName} - FAILED: ${r.error}`);
-        } else {
-          console.log(`[AI Handler] Result ${i + 1}: ${r.fileName} - SUCCESS (${r.inclusion?.length || 0} inclusion, ${r.exclusion?.length || 0} exclusion)`);
+          console.error(`[AI Handler] Failed result: ${r.fileName} - ${r.error}`);
         }
       });
 

@@ -9,7 +9,7 @@ import { registerSettingsHandlers } from './settingsHandler';
 import { registerSystemHandlers } from './systemHandler';
 import { registerAIHandlers } from './aiHandler';
 import { registerExcelHandlers } from './excelHandler';
-// import { registerDialogHandlers } from './dialogHandler';
+import { registerDialogHandlers } from './dialogHandler';
 
 export function registerIPCHandlers(): void {
   registerFileHandlers();
@@ -17,5 +17,5 @@ export function registerIPCHandlers(): void {
   registerSystemHandlers();
   registerAIHandlers();
   registerExcelHandlers();
-  // TODO: registerDialogHandlers();
+  registerDialogHandlers();
 }

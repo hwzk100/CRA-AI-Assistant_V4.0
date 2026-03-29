@@ -421,6 +421,73 @@ ${exclusionList.map((c, i) => `${i + 1}. [ID: ${c.id}] ${c.description}`).join('
   }
 
   /**
+   * Split content into chunks for batch processing
+   * @param content - Full text content to split
+   * @param chunkTokens - Target chunk size in tokens
+   * @param overlapTokens - Overlap between chunks in tokens
+   * @returns Array of content chunks with batch indicators
+   */
+  static splitContent(content: string, chunkTokens: number, overlapTokens: number): string[] {
+    const chunkChars = chunkTokens * 2; // 1 token ≈ 2 chars for Chinese
+    const overlapChars = overlapTokens * 2;
+
+    if (content.length <= chunkChars) {
+      return [content];
+    }
+
+    const chunks: string[] = [];
+    let startPos = 0;
+
+    while (startPos < content.length) {
+      let endPos = Math.min(startPos + chunkChars, content.length);
+
+      // If this is not the last chunk, try to find a good split point
+      if (endPos < content.length) {
+        const searchRange = content.substring(startPos, endPos);
+        const splitPriority: Array<{ separator: string; name: string }> = [
+          { separator: '\n\n', name: 'paragraph' },
+          { separator: '\n', name: 'line' },
+          { separator: '。', name: 'sentence' },
+        ];
+
+        let bestSplitPos = -1;
+        for (const { separator } of splitPriority) {
+          const lastIdx = searchRange.lastIndexOf(separator);
+          if (lastIdx > chunkChars * 0.5) {
+            // Only split at positions in the latter half to avoid tiny chunks
+            bestSplitPos = startPos + lastIdx + separator.length;
+            break;
+          }
+        }
+
+        if (bestSplitPos > 0) {
+          endPos = bestSplitPos;
+        }
+      }
+
+      const chunk = content.substring(startPos, endPos).trim();
+      if (chunk.length > 0) {
+        chunks.push(chunk);
+      }
+
+      // Move start position back by overlap amount for context continuity
+      startPos = endPos - overlapChars;
+      if (startPos >= content.length) break;
+      // Ensure progress: if overlap would cause us to stay in same spot, advance
+      if (startPos <= (chunks.length > 1 ? endPos - chunkChars + overlapChars : 0)) {
+        startPos = endPos;
+      }
+    }
+
+    // Add batch indicators to each chunk
+    const totalChunks = chunks.length;
+    return chunks.map((chunk, index) => {
+      if (totalChunks <= 1) return chunk;
+      return `[这是长文档的第${index + 1}/${totalChunks}段，请仅提取本批次中的信息]\n\n${chunk}`;
+    });
+  }
+
+  /**
    * Clean and parse JSON response
    */
   static parseJSONResponse<T>(response: string): Result<T> {

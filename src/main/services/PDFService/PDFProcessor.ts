@@ -12,6 +12,7 @@ import { Poppler } from 'node-poppler';
 import type { Result } from '@shared/types';
 import { ok, err, createAppError, ErrorCode } from '@shared/types';
 import { app } from 'electron';
+import { PDF_CONFIG } from '@shared/constants/app';
 
 /**
  * PDF Content Result
@@ -69,8 +70,7 @@ export class PDFProcessor {
       const meaningfulChars = data.text.replace(/[\s\n\r\t]/g, '').length;
 
       // PDF is considered scanned if text is too short
-      const threshold = 100;
-      const isScanned = textLength < threshold || meaningfulChars < textLength * 0.3;
+      const isScanned = textLength < PDF_CONFIG.SCANNED_TEXT_THRESHOLD || meaningfulChars < textLength * PDF_CONFIG.MEANINGFUL_CHAR_RATIO;
 
       console.log(`[PDFProcessor] PDF text length: ${textLength}, meaningful chars: ${meaningfulChars}, isScanned: ${isScanned}`);
 
@@ -95,7 +95,8 @@ export class PDFProcessor {
    */
   async convertPDFToImages(
     filePath: string,
-    maxPages: number = 10
+    maxPages: number = PDF_CONFIG.MAX_PAGES_FOR_CONVERSION,
+    startPage: number = 1
   ): Promise<Result<string[]>> {
     try {
       console.log(`[PDFProcessor] Starting PDF conversion with node-poppler, max pages: ${maxPages}`);
@@ -122,8 +123,8 @@ export class PDFProcessor {
       const options = {
         pngFile: true, // Use PNG format instead of PPM
         resolutionXYAxis: 150, // 150 DPI to reduce image size and avoid API limits
-        firstPageToConvert: 1,
-        lastPageToConvert: maxPages,
+        firstPageToConvert: startPage,
+        lastPageToConvert: startPage + maxPages - 1,
       };
 
       // pdfToPpm uses the output prefix (will append -1.png, -2.png, etc.)
@@ -132,9 +133,9 @@ export class PDFProcessor {
 
       // Get list of generated files
       const imagePaths: string[] = [];
-      let page = 1;
+      let page = startPage;
 
-      while (page <= maxPages) {
+      while (page < startPage + maxPages) {
         const imagePath = `${outputPathPrefix}-${page}.png`;
         try {
           await fs.access(imagePath);
@@ -178,6 +179,61 @@ export class PDFProcessor {
         errorMessage
       ));
     }
+  }
+
+  /**
+   * Get total page count of a PDF
+   */
+  async getPDFPageCount(filePath: string): Promise<number> {
+    try {
+      const buffer = await fs.readFile(filePath);
+      const data = await pdfParse(buffer);
+      return data.numpages;
+    } catch (error) {
+      console.error('[PDFProcessor] Failed to get page count:', error);
+      return 1;
+    }
+  }
+
+  /**
+   * Convert scanned PDF to images in batches
+   * Each batch converts BATCH_IMAGES_PER_BATCH pages, returns results, and cleans up
+   */
+  async convertPDFToImagesBatch(
+    filePath: string,
+    imagesPerBatch: number = PDF_CONFIG.BATCH_IMAGES_PER_BATCH,
+    onBatchComplete?: (batchIndex: number, totalPages: number) => void
+  ): Promise<Result<string[][]>> {
+    const totalPages = await this.getPDFPageCount(filePath);
+    console.log(`[PDFProcessor] Batch conversion: ${totalPages} pages, ${imagesPerBatch} per batch`);
+
+    const allBatches: string[][] = [];
+    let currentPage = 1;
+
+    while (currentPage <= totalPages) {
+      const pagesInBatch = Math.min(imagesPerBatch, totalPages - currentPage + 1);
+      console.log(`[PDFProcessor] Converting batch: pages ${currentPage}-${currentPage + pagesInBatch - 1}`);
+
+      const batchResult = await this.convertPDFToImages(filePath, pagesInBatch, currentPage);
+
+      if (!batchResult.success) {
+        // Clean up any previously created batches
+        for (const batch of allBatches) {
+          await this.cleanupImages(batch);
+        }
+        return batchResult;
+      }
+
+      allBatches.push(batchResult.data);
+
+      if (onBatchComplete) {
+        onBatchComplete(allBatches.length, totalPages);
+      }
+
+      currentPage += pagesInBatch;
+    }
+
+    return ok(allBatches);
   }
 
   /**

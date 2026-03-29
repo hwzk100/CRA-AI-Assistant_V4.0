@@ -36,6 +36,13 @@ const electronAPI = {
   // Dialog operations
   openFile: (filters: any[]) => ipcRenderer.invoke('dialog:openFile', filters),
   saveFile: (defaultPath: string, filters: any[]) => ipcRenderer.invoke('dialog:saveFile', defaultPath, filters),
+
+  // Progress events
+  onProgress: (callback: (progress: { current: number; total: number; stage: string }) => void) => {
+    const listener = (_event: any, progress: any) => callback(progress);
+    ipcRenderer.on('ai:progress', listener);
+    return () => { ipcRenderer.removeListener('ai:progress', listener); };
+  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

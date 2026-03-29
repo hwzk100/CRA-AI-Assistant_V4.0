@@ -2,7 +2,7 @@
  * CRA AI Assistant - File Upload Zone Component
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useStore } from '../../hooks/useStore';
 import { StorageZone, FileType, FileStatus } from '@shared/types';
 
@@ -24,6 +24,16 @@ export const FileZone: React.FC<FileZoneProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const { addFile, updateFileStatus, setProtocolFiles, setSubjectFiles, removeFile, setProcessing } = useStore();
+
+  // Listen for AI processing progress events
+  useEffect(() => {
+    if (!window.electronAPI?.onProgress) return;
+    const cleanup = window.electronAPI.onProgress((progress) => {
+      const percent = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
+      setProcessing(true, 'processing', percent);
+    });
+    return cleanup;
+  }, [setProcessing]);
 
   const files = zone === StorageZone.PROTOCOL
     ? useStore((state) => state.protocolFiles)
@@ -256,6 +266,97 @@ export const FileZone: React.FC<FileZoneProps> = ({
   const pendingCount = files.filter(f => f.status === FileStatus.PENDING || f.status === FileStatus.FAILED).length;
   const globalIsProcessing = useStore((state) => state.isProcessing);
 
+  // 自动运行资格分析（入选/排除标准 vs 受试者文件）
+  const runEligibilityAnalysis = async () => {
+    const state = useStore.getState();
+    const inclusionCriteria = state.inclusionCriteria;
+    const exclusionCriteria = state.exclusionCriteria;
+    const completedSubjectFiles = state.subjectFiles.filter(f => f.status === FileStatus.COMPLETED);
+
+    if (completedSubjectFiles.length === 0) return;
+    if (inclusionCriteria.length === 0 && exclusionCriteria.length === 0) return;
+
+    const filePaths = completedSubjectFiles.map(f => f.path);
+    const inclusionData = inclusionCriteria.map(c => ({ id: c.id, description: c.description }));
+    const exclusionData = exclusionCriteria.map(c => ({ id: c.id, description: c.description }));
+
+    const totalSteps = (inclusionData.length > 0 ? 1 : 0) + (exclusionData.length > 0 ? 1 : 0);
+    let currentStep = 0;
+
+    try {
+      // 分开调用：一次只分析入选标准，一次只分析排除标准
+      // 避免 AI 在一次调用中返回不完整的结果
+
+      // 1. 分析入选标准
+      if (inclusionData.length > 0) {
+        currentStep++;
+        setProcessing(true, 'generating', Math.round((currentStep / totalSteps) * 100));
+        console.log('[FileZone] Analyzing inclusion criteria...');
+
+        const inclusionResult = await window.electronAPI.analyzeEligibility(filePaths, inclusionData, []);
+        if (inclusionResult.success && inclusionResult.data?.results) {
+          const criteriaMap = new Map<string, any[]>();
+          inclusionResult.data.results.forEach((fileResult: any) => {
+            if (fileResult.error) return;
+            (fileResult.inclusion || []).forEach((item: any) => {
+              if (!criteriaMap.has(item.id)) criteriaMap.set(item.id, []);
+              criteriaMap.get(item.id)!.push({
+                fileId: fileResult.filePath,
+                fileName: fileResult.fileName,
+                eligible: item.eligible,
+                reason: item.reason
+              });
+            });
+          });
+
+          const { updateInclusionFileResults, updateInclusionEligibility } = useStore.getState();
+          criteriaMap.forEach((fileResults, criteriaId) => {
+            updateInclusionFileResults(criteriaId, fileResults);
+            if (fileResults.length > 0) {
+              updateInclusionEligibility(criteriaId, fileResults[0].eligible, fileResults[0].reason);
+            }
+          });
+          console.log('[FileZone] Inclusion analysis done, updated', criteriaMap.size, 'criteria');
+        }
+      }
+
+      // 2. 分析排除标准
+      if (exclusionData.length > 0) {
+        currentStep++;
+        setProcessing(true, 'generating', Math.round((currentStep / totalSteps) * 100));
+        console.log('[FileZone] Analyzing exclusion criteria...');
+
+        const exclusionResult = await window.electronAPI.analyzeEligibility(filePaths, [], exclusionData);
+        if (exclusionResult.success && exclusionResult.data?.results) {
+          const criteriaMap = new Map<string, any[]>();
+          exclusionResult.data.results.forEach((fileResult: any) => {
+            if (fileResult.error) return;
+            (fileResult.exclusion || []).forEach((item: any) => {
+              if (!criteriaMap.has(item.id)) criteriaMap.set(item.id, []);
+              criteriaMap.get(item.id)!.push({
+                fileId: fileResult.filePath,
+                fileName: fileResult.fileName,
+                eligible: item.eligible,
+                reason: item.reason
+              });
+            });
+          });
+
+          const { updateExclusionFileResults, updateExclusionEligibility } = useStore.getState();
+          criteriaMap.forEach((fileResults, criteriaId) => {
+            updateExclusionFileResults(criteriaId, fileResults);
+            if (fileResults.length > 0) {
+              updateExclusionEligibility(criteriaId, fileResults[0].eligible, fileResults[0].reason);
+            }
+          });
+          console.log('[FileZone] Exclusion analysis done, updated', criteriaMap.size, 'criteria');
+        }
+      }
+    } catch (error) {
+      console.error('Eligibility analysis failed:', error);
+    }
+  };
+
   // 开始处理所有待处理文件
   const handleStartProcessing = async () => {
     // Pre-check API key
@@ -282,6 +383,12 @@ export const FileZone: React.FC<FileZoneProps> = ({
         const progress = Math.round(((i) / filesToProcess.length) * 100);
         setProcessing(true, 'processing', progress);
         await processSingleFile(filesToProcess[i]);
+      }
+
+      // 文件处理完成后，仅在受试者区域触发资格分析
+      // （此时方案标准已经提取完毕，避免重复分析或覆盖结果）
+      if (zone === StorageZone.SUBJECT) {
+        await runEligibilityAnalysis();
       }
     } finally {
       setProcessing(false, 'idle', 100);

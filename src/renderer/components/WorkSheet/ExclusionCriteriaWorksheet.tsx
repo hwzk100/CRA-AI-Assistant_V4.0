@@ -4,7 +4,7 @@
 
 import React, { useState } from 'react';
 import { useExclusionCriteria, useStore, useSubjectFiles } from '../../hooks/useStore';
-import type { ExclusionCriteria } from '@shared/types';
+import type { ExclusionCriteria, ExclusionFileResult } from '@shared/types';
 import { generateId } from '@shared/types/worksheet';
 
 export const ExclusionCriteriaWorksheet: React.FC = () => {
