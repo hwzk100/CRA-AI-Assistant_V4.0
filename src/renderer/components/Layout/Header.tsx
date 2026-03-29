@@ -10,6 +10,7 @@ import { SettingsDialog } from '../Settings/SettingsDialog';
 export const Header: React.FC = () => {
   const settings = useSettings();
   const isProcessing = useIsProcessing();
+  const processingProgress = useStore((state) => state.processingProgress);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
@@ -76,7 +77,9 @@ export const Header: React.FC = () => {
         {isProcessing && (
           <div className="flex items-center space-x-2 bg-primary-700 px-4 py-1.5 rounded-full">
             <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
-            <span className="text-sm font-medium">处理中...</span>
+            <span className="text-sm font-medium">
+              处理中{processingProgress > 0 ? ` (${processingProgress}%)` : '...'}
+            </span>
           </div>
         )}
 

@@ -23,7 +23,7 @@ export const FileZone: React.FC<FileZoneProps> = ({
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const { addFile, updateFileStatus, setProtocolFiles, setSubjectFiles, removeFile } = useStore();
+  const { addFile, updateFileStatus, setProtocolFiles, setSubjectFiles, removeFile, setProcessing } = useStore();
 
   const files = zone === StorageZone.PROTOCOL
     ? useStore((state) => state.protocolFiles)
@@ -56,9 +56,8 @@ export const FileZone: React.FC<FileZoneProps> = ({
         path: (file as any).path || file.name,
         size: file.size,
         type: file.type.includes('pdf') ? FileType.PDF : FileType.IMAGE,
-        status: FileStatus.COMPLETED,
+        status: FileStatus.PENDING,
         uploadedAt: new Date(),
-        processedAt: new Date(),
       };
       console.log('File info created:', fileInfo);
 
@@ -253,7 +252,41 @@ export const FileZone: React.FC<FileZoneProps> = ({
     }
   }, [zone]);
 
-  const isProcessing = files.some(f => f.status === FileStatus.PROCESSING);
+  // Computed values
+  const pendingCount = files.filter(f => f.status === FileStatus.PENDING || f.status === FileStatus.FAILED).length;
+  const globalIsProcessing = useStore((state) => state.isProcessing);
+
+  // 开始处理所有待处理文件
+  const handleStartProcessing = async () => {
+    // Pre-check API key
+    const settingsResult = await window.electronAPI.getSettings();
+    if (!settingsResult.success || !settingsResult.data.apiKey) {
+      alert('请先在设置中配置 API Key');
+      return;
+    }
+
+    // Get current pending/failed files from store
+    const currentFiles = zone === StorageZone.PROTOCOL
+      ? useStore.getState().protocolFiles
+      : useStore.getState().subjectFiles;
+    const filesToProcess = currentFiles.filter(
+      f => f.status === FileStatus.PENDING || f.status === FileStatus.FAILED
+    );
+
+    if (filesToProcess.length === 0) return;
+
+    setProcessing(true, 'processing', 0);
+
+    try {
+      for (let i = 0; i < filesToProcess.length; i++) {
+        const progress = Math.round(((i) / filesToProcess.length) * 100);
+        setProcessing(true, 'processing', progress);
+        await processSingleFile(filesToProcess[i]);
+      }
+    } finally {
+      setProcessing(false, 'idle', 100);
+    }
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -301,15 +334,37 @@ export const FileZone: React.FC<FileZoneProps> = ({
             <span className="text-xs text-gray-600">
               已上传 {files.length} 个文件
             </span>
-            <button
-              onClick={handleClearAll}
-              className="text-xs text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition-colors flex items-center space-x-1"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-              <span>清空全部</span>
-            </button>
+            <div className="flex items-center space-x-2">
+              {pendingCount > 0 && (
+                <button
+                  onClick={handleStartProcessing}
+                  disabled={globalIsProcessing}
+                  className={`text-xs px-2.5 py-1 rounded transition-colors flex items-center space-x-1 ${
+                    globalIsProcessing
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-primary-500 text-white hover:bg-primary-600'
+                  }`}
+                >
+                  {globalIsProcessing ? (
+                    <>
+                      <div className="animate-spin rounded-full h-3 w-3 border-2 border-current border-t-transparent"></div>
+                      <span>处理中...</span>
+                    </>
+                  ) : (
+                    <span>开始处理 ({pendingCount})</span>
+                  )}
+                </button>
+              )}
+              <button
+                onClick={handleClearAll}
+                className="text-xs text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition-colors flex items-center space-x-1"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                <span>清空全部</span>
+              </button>
+            </div>
           </div>
         )}
         {files.length === 0 ? (
