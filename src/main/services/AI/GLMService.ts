@@ -497,22 +497,22 @@ export class GLMService implements IAIService {
       const inclusion = data.inclusion || (data as any)['入选标准'];
       const exclusion = data.exclusion || (data as any)['排除标准'];
 
-      // Validate the parsed data structure
-      if (!inclusion || !Array.isArray(inclusion)) {
+      // Validate: only require fields when corresponding criteria were provided
+      if (inclusionCriteria.length > 0 && (!inclusion || !Array.isArray(inclusion))) {
         return err(createAppError(
           ErrorCode.AI_PARSE_ERROR,
           '解析后的数据缺少 inclusion/入选标准 字段或格式不正确'
         ));
       }
 
-      if (!exclusion || !Array.isArray(exclusion)) {
+      if (exclusionCriteria.length > 0 && (!exclusion || !Array.isArray(exclusion))) {
         return err(createAppError(
           ErrorCode.AI_PARSE_ERROR,
           '解析后的数据缺少 exclusion/排除标准 字段或格式不正确'
         ));
       }
 
-      return ok({ inclusion, exclusion });
+      return ok({ inclusion: inclusion || [], exclusion: exclusion || [] });
     } catch (error) {
       return err(createAppError(
         ErrorCode.AI_API_ERROR,
@@ -558,21 +558,22 @@ export class GLMService implements IAIService {
       const inclusion = data.inclusion || (data as any)['入选标准'];
       const exclusion = data.exclusion || (data as any)['排除标准'];
 
-      if (!inclusion || !Array.isArray(inclusion)) {
+      // Validate: only require fields when corresponding criteria were provided
+      if (inclusionCriteria.length > 0 && (!inclusion || !Array.isArray(inclusion))) {
         return err(createAppError(
           ErrorCode.AI_PARSE_ERROR,
           '解析后的数据缺少 inclusion/入选标准 字段或格式不正确'
         ));
       }
 
-      if (!exclusion || !Array.isArray(exclusion)) {
+      if (exclusionCriteria.length > 0 && (!exclusion || !Array.isArray(exclusion))) {
         return err(createAppError(
           ErrorCode.AI_PARSE_ERROR,
           '解析后的数据缺少 exclusion/排除标准 字段或格式不正确'
         ));
       }
 
-      return ok({ inclusion, exclusion });
+      return ok({ inclusion: inclusion || [], exclusion: exclusion || [] });
     } catch (error) {
       return err(createAppError(
         ErrorCode.AI_API_ERROR,

@@ -394,11 +394,21 @@ ${exclusionList.map((c, i) => `${i + 1}. [ID: ${c.id}] ${c.description}`).join('
     const inclusionList = Array.isArray(inclusionCriteria) ? inclusionCriteria : [];
     const exclusionList = Array.isArray(exclusionCriteria) ? exclusionCriteria : [];
 
-    const criteriaText = inclusionList.map((c) => `${c.id}: ${c.description}`).join('\n');
+    const inclusionText = inclusionList.map((c) => `${c.id}: ${c.description}`).join('\n');
+    const exclusionText = exclusionList.map((c) => `${c.id}: ${c.description}`).join('\n');
+
+    let userPrompt = '';
+    if (inclusionList.length > 0 && exclusionList.length > 0) {
+      userPrompt = `分析受试者是否符合以下标准：\n\n入选标准(${inclusionList.length}条)：\n${inclusionText}\n\n排除标准(${exclusionList.length}条)：\n${exclusionText}\n\n返回JSON格式结果。`;
+    } else if (inclusionList.length > 0) {
+      userPrompt = `分析受试者是否符合以下${inclusionList.length}条入选标准：\n\n${inclusionText}\n\n返回JSON格式结果。`;
+    } else if (exclusionList.length > 0) {
+      userPrompt = `分析受试者是否符合以下${exclusionList.length}条排除标准：\n\n${exclusionText}\n\n返回JSON格式结果。`;
+    }
 
     return {
       system: this.ELIGIBILITY_FROM_IMAGE_PROMPT,
-      user: `分析受试者是否符合以下${inclusionList.length}条入选标准：\n\n${criteriaText}\n\n返回JSON格式结果。`,
+      user: userPrompt,
     };
   }
 

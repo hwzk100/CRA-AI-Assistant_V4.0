@@ -30,7 +30,7 @@
 | **Tailwind CSS** | ^3.3.0 | 样式框架 |
 | **ExcelJS** | ^4.4.0 | Excel 生成 |
 | **pdf-parse** | ^1.1.1 | PDF 文本解析 |
-| **pdf-to-img** | ^3.0.0 | PDF 转图片（扫描版处理） |
+| **node-poppler** | ^7.0.0 | PDF 转图片（扫描版处理，使用 poppler-utils） |
 | **axios** | ^1.6.0 | HTTP 客户端 |
 
 ### AI 集成
@@ -262,15 +262,22 @@ cra-ai-assistant/
 │   │   │   └── handlers/       # IPC 处理器
 │   │   │       ├── index.ts    # 处理器注册
 │   │   │       ├── aiHandler.ts
+│   │   │       ├── dialogHandler.ts
 │   │   │       ├── fileHandler.ts
 │   │   │       ├── settingsHandler.ts
+│   │   │       ├── systemHandler.ts
 │   │   │       └── excelHandler.ts
 │   │   └── services/           # 业务服务
 │   │       ├── AI/
 │   │       │   ├── GLMService.ts      # GLM-4 API 客户端
-│   │       │   └── PromptEngine.ts    # Prompt 模板
+│   │       │   ├── PromptEngine.ts    # Prompt 模板 + 文本分段
+│   │       │   ├── BatchProcessor.ts  # 大文件分批处理
+│   │       │   ├── ResultMerger.ts    # 多批次结果合并
+│   │       │   └── types.ts           # AI 相关类型定义
 │   │       ├── Storage/
 │   │       │   └── FileStorage.ts     # 文件存储服务
+│   │       ├── PDFService/
+│   │       │   └── PDFProcessor.ts    # PDF 解析与转换（node-poppler）
 │   │       └── ExcelService/
 │   │           └── ExcelGenerator.ts  # Excel 生成
 │   │
@@ -366,85 +373,135 @@ enum FileStatus {
 
 ### PDF 处理机制
 
-应用支持两种类型的 PDF 文件：
+应用支持两种类型的 PDF 文件，并自动根据文件大小选择单次处理或分批处理。
 
-#### 1. 文本 PDF（Text-based PDF）
+#### PDF 类型检测
 
-直接使用 `pdf-parse` 库提取文本内容：
+使用 `pdf-parse` 提取文本，当文本少于 100 字符或有效字符占比低于 30% 时判定为扫描版 PDF：
 
 ```typescript
-const buffer = await fs.readFile(filePath);
-const data = await pdfParse(buffer);
-const content = data.text; // 提取的文本
+const textLength = data.text.trim().length;
+const meaningfulChars = data.text.replace(/[\s\n\r\t]/g, '').length;
+const isScanned = textLength < PDF_CONFIG.SCANNED_TEXT_THRESHOLD
+  || meaningfulChars < textLength * PDF_CONFIG.MEANINGFUL_CHAR_RATIO;
 ```
 
-#### 2. 扫描版 PDF（Scanned PDF）
+#### 文本 PDF 处理
 
-当检测到 PDF 文本内容少于 50 个字符时，自动切换到图片处理模式：
+**小文件 (<16000 字符)**：一次性提取全文，并行调用 `extractCriteria` + `extractVisitSchedule`。
+
+**大文件 (>16000 字符)**：自动分批处理：
+
+```
+PromptEngine.splitContent(content, chunkTokens=6000, overlapTokens=500)
+  → 按 chunkTokens*2 字符分段
+  → 分割点优先级：段落(\n\n) > 行(\n) > 句(。) > 任意
+  → 段间重叠 overlapTokens*2 字符
+  → 每段附加 [这是长文档的第X/Y段] 提示
+  ↓
+BatchProcessor.processTextInBatches → 串行处理每段
+  ↓
+ResultMerger 合并去重
+```
+
+#### 扫描版 PDF 处理
+
+使用 `node-poppler`（而非 pdf-to-img）将 PDF 页面转换为 PNG 图片，再通过 GLM-4.6V-Flash 视觉模型处理。
+
+**小文件 (≤10 页)**：转换全部页面，逐页 OCR 或逐页 VLM 分析。
+
+**大文件 (>10 页)**：分批转换处理：
+
+```
+BatchProcessor.processScannedInBatches(filePath, pdfProcessor, processFn)
+  → 每批转换 BATCH_IMAGES_PER_BATCH (5) 页为 PNG
+  → 每批处理完毕后立即 cleanupImages() 删除临时图片
+  → 串行处理避免内存溢出
+  ↓
+对于方案文件: OCR 每批 → 合并全文 → 再走文本分批提取
+对于受试者文件: 逐页 VLM 分析 → ResultMerger 合并受试者数据
+对于资格分析: 逐页 VLM 分析 → ResultMerger 合并资格结果
+```
+
+#### 分批处理配置
+
+所有分批参数集中在 `PDF_CONFIG` 常量（`src/shared/constants/app.ts`）：
 
 ```typescript
-// 检测扫描版 PDF
-const meaningfulTextLength = content.replace(/\s+/g, '').length;
-if (meaningfulTextLength < 50) {
-  // 使用 GLM-4V 视觉模型从图片中提取文字
-  const scannedText = await readScannedPDF(filePath, settings);
+export const PDF_CONFIG = {
+  MAX_PAGES_FOR_CONVERSION: 10,      // 单次最大转换页数
+  SCANNED_TEXT_THRESHOLD: 100,       // 扫描版文本阈值
+  MEANINGFUL_CHAR_RATIO: 0.3,        // 有效字符占比阈值
+  TEMP_DIR: 'cra-ai-pdf-cache',      // 临时目录
+  IMAGE_SCALE: 2.0,                   // PDF转图片缩放
+  BATCH_TEXT_CHUNK_TOKENS: 6000,      // 文本每批大小（tokens）
+  BATCH_TEXT_OVERLAP_TOKENS: 500,     // 段间重叠（tokens）
+  BATCH_IMAGES_PER_BATCH: 5,         // 扫描PDF每批图片数
+  BATCH_AI_MAX_TOKENS: 8192,         // AI响应max_tokens
+  BATCH_LARGE_FILE_THRESHOLD: 16000, // 启用分批的字符数阈值
+} as const;
+```
+
+#### 结果合并策略
+
+`ResultMerger` 提供四种合并策略：
+
+| 数据类型 | 合并规则 |
+|---------|---------|
+| 入选/排除标准 | 按 description 文本相似度(>0.9)去重，保留更完整版本 |
+| 访视计划 | 按 visitType 去重，同类型合并 items 数组 |
+| 受试者数据 | 非 null 字段后批覆盖前批，数组按内容去重 |
+| 资格分析 | 所有批次一致→取该结果；不一致→多数投票+标记"需人工审核" |
+
+#### 进度反馈
+
+大文件处理时，主进程通过 IPC 事件 `ai:progress` 推送进度到渲染进程：
+
+```typescript
+// 主进程发送进度
+event.sender.send('ai:progress', { current: 2, total: 10, stage: '正在处理文本批次 2/10' });
+
+// Preload 暴露监听接口
+onProgress: (callback) => {
+  const listener = (_event, progress) => callback(progress);
+  ipcRenderer.on('ai:progress', listener);
+  return () => ipcRenderer.removeListener('ai:progress', listener);
 }
+
+// FileZone 组件监听
+useEffect(() => {
+  const cleanup = window.electronAPI.onProgress((progress) => {
+    const percent = Math.round((progress.current / progress.total) * 100);
+    setProcessing(true, 'processing', percent);
+  });
+  return cleanup;
+}, []);
 ```
 
-**扫描版 PDF 处理流程**：
+#### GLMService max_tokens 配置
 
-1. 使用 `pdf-to-img` 将 PDF 页面转换为 PNG 图片
-2. 使用 GLM-4V 视觉模型从图片中提取文字
-3. 只处理前 3 页（节省时间和 API 配额）
-4. 合并所有页面的提取结果
+不同提取方法使用不同的 `max_tokens`：
 
-```typescript
-async function readScannedPDF(filePath: string, settings: { apiKey: string; modelName: string }): Promise<string> {
-  const service = getGLMService({ apiKey: settings.apiKey, modelName: 'glm-4v' });
-  const pdfConvert = await pdfToPng(filePath, { scale: 2.0 });
-  const allText: string[] = [];
+| 方法 | max_tokens | 说明 |
+|------|-----------|------|
+| `extractCriteria` | 8192 | 标准提取可能返回大量条目 |
+| `extractVisitSchedule` | 8192 | 访视计划数据量较大 |
+| `analyzeEligibility` | 8192 | 资格分析结果较长 |
+| `recognizeMedications` | 4096 | 用药记录适中 |
+| `extractSubjectNumber` | 2048 | 仅提取基本信息，数据量小 |
 
-  let pageCount = 0;
-  for await (const page of pdfConvert) {
-    pageCount++;
-
-    // 保存到临时文件
-    const tempImagePath = path.join(os.tmpdir(), `pdf_page_${pageCount}.png`);
-    await fs.writeFile(tempImagePath, page.content);
-
-    // 使用 AI 提取文字
-    const result = await service.extractFromImage(tempImagePath, '请提取图片中的所有文字内容...');
-    if (result.success && result.data.text) {
-      allText.push(result.data.text);
-    }
-
-    // 清理临时文件
-    await fs.unlink(tempImagePath);
-
-    // 只处理前 3 页
-    if (pageCount >= 3) break;
-  }
-
-  return allText.join('\n\n');
-}
-```
-
-**PDF 处理缓存**：
+#### PDF 处理缓存
 
 ```typescript
-const pdfContentCache = new Map<string, string>();
+const pdfContentCache = new Map<string, PDFContentResult>();
 
-async function readPDFContent(filePath: string, settings?: Settings): Promise<string> {
-  // 检查缓存
+async function readPDFContent(filePath: string): Promise<PDFContentResult> {
   if (pdfContentCache.has(filePath)) {
     return pdfContentCache.get(filePath)!;
   }
-
   // ... 处理逻辑 ...
-
-  // 缓存结果
-  pdfContentCache.set(filePath, content);
-  return content;
+  pdfContentCache.set(filePath, result.data);
+  return result.data;
 }
 ```
 
@@ -586,25 +643,60 @@ async extractMyData(fileContent: string): Promise<Result<MyData[]>> {
 
 3. **添加 IPC 处理器**（参考"添加新的 IPC 处理器"）
 
-#### 处理扫描版文档
+#### 处理大文件（分批处理）
 
-如果你的新功能需要处理扫描版 PDF：
+如果新功能需要处理大型 PDF，使用 `BatchProcessor` 和 `ResultMerger`：
 
 ```typescript
 // 在 aiHandler.ts 中
 ipcMain.handle('ai:extractMyNewData', async (event, fileId: string, filePath: string) => {
-  const settings = await getSettings();
+  const settings = getSettings();
+  const pdfResult = await readPDFContent(filePath);
 
-  // 自动检测并处理扫描版 PDF
-  const content = await readPDFContent(filePath, {
-    apiKey: settings.apiKey,
-    modelName: settings.modelName
-  });
-
-  // content 现在包含了从文本 PDF 或扫描版 PDF 提取的文字
-  const result = await service.extractMyData(fileId, content);
-  return result;
+  if (pdfResult.type === 'text') {
+    if (BatchProcessor.shouldBatch(pdfResult.content)) {
+      // 大文件分批处理
+      const batches = await BatchProcessor.processTextInBatches(
+        pdfResult.content,
+        async (chunk, batchIdx, total) => {
+          sendProgress(event, batchIdx + 1, total, `正在处理批次 ${batchIdx + 1}/${total}`);
+          const service = getGLMService({ apiKey: settings.apiKey });
+          const result = await service.extractMyData(chunk);
+          return result.success ? result.data : [];
+        }
+      );
+      // 合并结果
+      return ok(ResultMerger.mergeCriteria(batches));
+    }
+    // 小文件单次调用
+    const service = getGLMService({ apiKey: settings.apiKey });
+    return await service.extractMyData(pdfResult.content);
+  }
 });
+```
+
+#### 处理扫描版文档
+
+如果新功能需要处理扫描版 PDF，使用 `BatchProcessor.processScannedInBatches`：
+
+```typescript
+// 大型扫描 PDF 分批处理
+const pdfProcessor = await getPDFProcessor();
+const results = await BatchProcessor.processScannedInBatches(
+  filePath,
+  pdfProcessor,
+  async (imagePaths, batchIdx, totalBatches) => {
+    sendProgress(event, batchIdx + 1, totalBatches, `正在分析批次 ${batchIdx + 1}/${totalBatches}`);
+    const service = getGLMService({ apiKey: settings.apiKey, modelName: 'glm-4.6v-flash' });
+    const batchResults = [];
+    for (const imagePath of imagePaths) {
+      const result = await service.extractSubjectDataFromImage(imagePath);
+      if (result.success) batchResults.push(result.data);
+    }
+    return batchResults;
+  }
+);
+const merged = ResultMerger.mergeSubjectData(results.flat());
 ```
 
 ### 样式开发指南
@@ -850,10 +942,11 @@ npm run dev
 
 **A**: 确保以下几点：
 
-1. **检查 API Key 配置**：确保 GLM-4V 模型的 API Key 已正确配置
-2. **检查 PDF 转换**：查看控制台是否有 `[AI Handler] PDF appears to be scanned` 日志
-3. **检查临时文件**：确认系统临时目录可写
-4. **检查页面数量**：默认只处理前 3 页，可以调整 `readScannedPDF` 函数中的限制
+1. **检查 API Key 配置**：确保 GLM-4.6V-Flash 模型的 API Key 已正确配置
+2. **检查 PDF 转换**：查看控制台是否有 `[PDFProcessor] Detected scanned PDF` 日志
+3. **检查 poppler**：确保 `resources/poppler/Library/bin/pdftoppm.exe` 存在
+4. **检查临时文件**：确认系统临时目录可写（`os.tmpdir()/cra-ai-pdf-cache`）
+5. **检查页面数量**：大文件自动分批处理，每批 5 页
 
 ### Q: PDF 内容提取为空？
 
@@ -869,8 +962,8 @@ npm run dev
 
 **A**: 确保以下几点：
 
-1. **API Key 权限**：确认 API Key 支持 GLM-4V 模型
-2. **模型名称**：使用 `glm-4v` 而不是 `glm-4`
+1. **API Key 权限**：确认 API Key 支持 GLM-4.6V-Flash 模型
+2. **模型名称**：使用 `glm-4.6v-flash`（免费视觉模型）
 3. **图片格式**：确保图片是 JPEG 或 PNG 格式
 4. **图片大小**：GLM-4V 对图片大小有限制，通常 10MB 以内
 
@@ -929,11 +1022,12 @@ url: base64Image
 
 ## 性能优化建议
 
-1. **文件上传**：使用分块上传处理大文件
-2. **AI 调用**：实现请求队列，避免并发过多
-3. **渲染性能**：使用虚拟列表处理大量数据
-4. **内存管理**：及时清理不需要的数据和监听器
-5. **缓存策略**：缓存 AI 解析结果，避免重复调用
+1. **大文件处理**：已实现分批处理机制，文本按 6000 tokens 分段（500 tokens 重叠），扫描 PDF 每批 5 页图片
+2. **内存管理**：每批扫描 PDF 处理后立即删除临时图片文件，避免内存堆积
+3. **AI 调用**：分批串行调用避免并发过多；不同方法使用合适的 max_tokens（8192/4096/2048）
+4. **缓存策略**：PDF 内容缓存避免重复读取；处理后清理缓存防止文件引用失效
+5. **结果合并**：多批次结果自动去重合并，标准按相似度>0.9 去重，访视按类型合并
+6. **进度反馈**：通过 IPC 事件推送实时进度，用户可感知处理进展
 
 ---
 
@@ -961,9 +1055,22 @@ MIT License - 详见 LICENSE 文件
 
 ---
 
-*本文档最后更新：2026年3月21日*
+*本文档最后更新：2026年3月30日*
 
 ## 更新日志
+
+### v4.0.3 (2026-03-30)
+- **重大更新**：支持大文件（500页 PDF）分批处理
+  - 新增 `BatchProcessor` 服务：文本分段处理 + 扫描 PDF 分批转换
+  - 新增 `ResultMerger` 服务：多批次结果智能合并（去重、投票）
+  - 新增 `PromptEngine.splitContent()`：智能文本分段，支持段落/行/句优先分割
+  - `PDFProcessor`：新增 `getPDFPageCount()`、`convertPDFToImagesBatch()`，支持分页范围转换
+  - `GLMService`：新增 `maxTokensOverride` 参数，不同方法使用合适 token 限制
+  - `aiHandler`：三个核心 handler 均支持分批处理，不再仅处理首页
+  - 进度反馈：通过 `ai:progress` IPC 事件推送实时进度到渲染进程
+- **修复**：扫描版 PDF 受试者文件仅分析第 1 页的问题
+- **修复**：扫描版 PDF 资格分析仅使用第 1 页的问题
+- **修复**：大文本 PDF 内容截断导致数据不完整的问题
 
 ### v4.0.2 (2026-03-23)
 - **重大更新**：切换到智谱 AI 免费视觉模型 GLM-4.6V-Flash
