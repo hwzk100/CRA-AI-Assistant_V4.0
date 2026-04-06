@@ -497,6 +497,20 @@ ${exclusionList.map((c, i) => `${i + 1}. [ID: ${c.id}] ${c.description}`).join('
     });
   }
 
+  // ============================================================================
+  // Public Accessors for Prompt Templates
+  // ============================================================================
+
+  /** Get the image extraction system prompt */
+  static getImageSystemPrompt(): string {
+    return this.IMAGE_SYSTEM_PROMPT;
+  }
+
+  /** Get the subject-data-from-image prompt */
+  static getSubjectDataFromImagePrompt(): string {
+    return this.SUBJECT_DATA_FROM_IMAGE_PROMPT;
+  }
+
   /**
    * Clean and parse JSON response
    */

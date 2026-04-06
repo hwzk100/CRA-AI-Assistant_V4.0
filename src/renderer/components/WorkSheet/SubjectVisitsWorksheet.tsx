@@ -9,7 +9,9 @@ import { generateId } from '@shared/types/worksheet';
 
 export const SubjectVisitsWorksheet: React.FC = () => {
   const subjectVisits = useSubjectVisits();
-  const { addSubjectVisit, updateSubjectVisit, removeSubjectVisit } = useStore();
+  const addSubjectVisit = useStore(s => s.addSubjectVisit);
+  const updateSubjectVisit = useStore(s => s.updateSubjectVisit);
+  const removeSubjectVisit = useStore(s => s.removeSubjectVisit);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{

@@ -46,10 +46,18 @@ export class GLMService implements IAIService {
   }
 
   /**
-   * Update API configuration
+   * Update API configuration and rebuild Axios client
    */
   updateConfig(config: Partial<AIServiceConfig>): void {
     this.config = { ...this.config, ...config };
+    // Rebuild Axios client so endpoint/timeout changes take effect
+    this.client = axios.create({
+      baseURL: this.config.apiEndpoint,
+      timeout: this.config.timeout,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
   }
 
   /**
@@ -125,6 +133,13 @@ export class GLMService implements IAIService {
    */
   private delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Public wrapper for making raw API calls (used by test handlers)
+   */
+  async rawCall(messages: unknown[], retries?: number, modelOverride?: string, maxTokensOverride?: number): Promise<Result<string>> {
+    return this.callAPI(messages, retries, modelOverride, maxTokensOverride);
   }
 
   /**
@@ -349,7 +364,7 @@ export class GLMService implements IAIService {
           content: [
             {
               type: 'text',
-              text: PromptEngine['IMAGE_SYSTEM_PROMPT'],
+              text: PromptEngine.getImageSystemPrompt(),
             },
             {
               type: 'image_url',
@@ -408,7 +423,7 @@ export class GLMService implements IAIService {
           content: [
             {
               type: 'text',
-              text: PromptEngine['SUBJECT_DATA_FROM_IMAGE_PROMPT'],
+              text: PromptEngine.getSubjectDataFromImagePrompt(),
             },
             {
               type: 'image_url',

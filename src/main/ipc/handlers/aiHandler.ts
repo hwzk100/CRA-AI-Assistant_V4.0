@@ -7,7 +7,7 @@ import { getGLMService } from '../../services/AI/GLMService';
 import { BatchProcessor } from '../../services/AI/BatchProcessor';
 import { ResultMerger } from '../../services/AI/ResultMerger';
 import type { Result } from '@shared/types';
-import { ErrorCode, createAppError, ok } from '@shared/types/core';
+import { ErrorCode, createAppError, ok, err } from '@shared/types/core';
 import { getCurrentSettings } from './settingsHandler';
 import { PDF_CONFIG } from '@shared/constants/app';
 
@@ -30,8 +30,9 @@ function getSettings(): { apiKey: string; modelName: string } {
   };
 }
 
-// PDF content cache to avoid re-reading files
-const pdfContentCache = new Map<string, PDFContentResult>();
+// PDF content cache with TTL to prevent stale references and unbounded growth
+const PDF_CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+const pdfContentCache = new Map<string, { result: PDFContentResult; timestamp: number }>();
 
 /**
  * PDF Content Result
@@ -46,9 +47,15 @@ interface PDFContentResult {
  * Read PDF content (handles both text and scanned PDFs)
  */
 async function readPDFContent(filePath: string): Promise<PDFContentResult> {
-  // Check cache first
-  if (pdfContentCache.has(filePath)) {
-    return pdfContentCache.get(filePath)!;
+  // Check cache first, with TTL validation
+  const cached = pdfContentCache.get(filePath);
+  if (cached) {
+    if (Date.now() - cached.timestamp > PDF_CACHE_TTL) {
+      // Expired entry - stale imagePaths may have been cleaned up
+      pdfContentCache.delete(filePath);
+    } else {
+      return cached.result;
+    }
   }
 
   const pdfProcessor = await getPDFProcessor();
@@ -58,8 +65,8 @@ async function readPDFContent(filePath: string): Promise<PDFContentResult> {
     throw new Error(result.error?.message || 'PDF processing failed');
   }
 
-  // Cache the result
-  pdfContentCache.set(filePath, result.data);
+  // Cache the result with timestamp
+  pdfContentCache.set(filePath, { result: result.data, timestamp: Date.now() });
   return result.data;
 }
 
@@ -83,6 +90,17 @@ function sendProgress(event: IpcMainInvokeEvent, current: number, total: number,
   } catch (e) {
     // Ignore errors if window is already closed
   }
+}
+
+/**
+ * Validate API key availability, * @returns Settings with valid apiKey or error Result
+ */
+function requireApiKey(): Result<{ apiKey: string; modelName: string }> {
+  const settings = getCurrentSettings();
+  if (!settings.apiKey) {
+    return err(createAppError(ErrorCode.API_KEY_MISSING, '请先配置 API Key'));
+  }
+  return ok({ apiKey: settings.apiKey, modelName: settings.modelName });
 }
 
 /**
@@ -123,7 +141,7 @@ export function registerAIHandlers(): void {
         }
       ];
 
-      const result = await service['callAPI'](messages, 1, 'glm-4.6v-flash');
+      const result = await service.rawCall(messages, 1, 'glm-4.6v-flash');
 
       if (!result.success) {
         return {
@@ -154,184 +172,84 @@ export function registerAIHandlers(): void {
 
   // Extract criteria from PDF
   ipcMain.handle('ai:extractCriteria', async (event, fileId: string, pdfContent: string): Promise<Result<any>> => {
+    const keyResult = requireApiKey();
+    if (!keyResult.success) return keyResult;
     try {
-      const settings = getSettings();
-      if (!settings.apiKey) {
-        return {
-          success: false,
-          error: createAppError(ErrorCode.API_KEY_MISSING, '请先配置 API Key'),
-        };
-      }
-
-      const service = getGLMService({ apiKey: settings.apiKey });
+      const service = getGLMService({ apiKey: keyResult.data.apiKey });
       return await service.extractCriteria(fileId, pdfContent);
     } catch (error) {
-      return {
-        success: false,
-        error: createAppError(
-          ErrorCode.AI_API_ERROR,
-          `提取标准失败: ${error instanceof Error ? error.message : 'Unknown error'}`
-        ),
-      };
-    }
-  });
-
-  // Extract visit schedule from PDF
-  ipcMain.handle('ai:extractVisitSchedule', async (event, fileId: string, pdfContent: string): Promise<Result<any>> => {
-    try {
-      const settings = getSettings();
-      if (!settings.apiKey) {
-        return {
-          success: false,
-          error: createAppError(ErrorCode.API_KEY_MISSING, '请先配置 API Key'),
-        };
-      }
-
-      const service = getGLMService({ apiKey: settings.apiKey });
-      return await service.extractVisitSchedule(fileId, pdfContent);
-    } catch (error) {
-      return {
-        success: false,
-        error: createAppError(
-          ErrorCode.AI_API_ERROR,
-          `提取访视计划失败: ${error instanceof Error ? error.message : 'Unknown error'}`
-        ),
-      };
+      return err(createAppError(ErrorCode.AI_API_ERROR, `提取标准失败: ${error instanceof Error ? error.message : 'Unknown error'}`));
     }
   });
 
   // Recognize medications
   ipcMain.handle('ai:recognizeMedications', async (event, fileId: string, content: string): Promise<Result<any>> => {
+    const keyResult = requireApiKey();
+    if (!keyResult.success) return keyResult;
     try {
-      const settings = getSettings();
-      if (!settings.apiKey) {
-        return {
-          success: false,
-          error: createAppError(ErrorCode.API_KEY_MISSING, '请先配置 API Key'),
-        };
-      }
-
-      const service = getGLMService({ apiKey: settings.apiKey });
+      const service = getGLMService({ apiKey: keyResult.data.apiKey });
       return await service.recognizeMedications(fileId, content);
     } catch (error) {
-      return {
-        success: false,
-        error: createAppError(
-          ErrorCode.AI_API_ERROR,
-          `识别用药记录失败: ${error instanceof Error ? error.message : 'Unknown error'}`
-        ),
-      };
+      return err(createAppError(ErrorCode.AI_API_ERROR, `识别用药记录失败: ${error instanceof Error ? error.message : 'Unknown error'}`));
     }
   });
 
   // Extract subject number
   ipcMain.handle('ai:extractSubjectNumber', async (event, fileId: string, content: string): Promise<Result<any>> => {
+    const keyResult = requireApiKey();
+    if (!keyResult.success) return keyResult;
     try {
-      const settings = getSettings();
-      if (!settings.apiKey) {
-        return {
-          success: false,
-          error: createAppError(ErrorCode.API_KEY_MISSING, '请先配置 API Key'),
-        };
-      }
-
-      const service = getGLMService({ apiKey: settings.apiKey });
+      const service = getGLMService({ apiKey: keyResult.data.apiKey });
       return await service.extractSubjectNumber(fileId, content);
     } catch (error) {
-      return {
-        success: false,
-        error: createAppError(
-          ErrorCode.AI_API_ERROR,
-          `提取受试者编号失败: ${error instanceof Error ? error.message : 'Unknown error'}`
-        ),
-      };
+      return err(createAppError(ErrorCode.AI_API_ERROR, `提取受试者编号失败: ${error instanceof Error ? error.message : 'Unknown error'}`));
     }
   });
 
   // Extract subject visit dates
   ipcMain.handle('ai:extractSubjectVisitDates', async (event, fileId: string, content: string): Promise<Result<any>> => {
+    const keyResult = requireApiKey();
+    if (!keyResult.success) return keyResult;
     try {
-      const settings = getSettings();
-      if (!settings.apiKey) {
-        return {
-          success: false,
-          error: createAppError(ErrorCode.API_KEY_MISSING, '请先配置 API Key'),
-        };
-      }
-
-      const service = getGLMService({ apiKey: settings.apiKey });
+      const service = getGLMService({ apiKey: keyResult.data.apiKey });
       return await service.extractSubjectVisitDates(fileId, content);
     } catch (error) {
-      return {
-        success: false,
-        error: createAppError(
-          ErrorCode.AI_API_ERROR,
-          `提取访视日期失败: ${error instanceof Error ? error.message : 'Unknown error'}`
-        ),
-      };
+      return err(createAppError(ErrorCode.AI_API_ERROR, `提取访视日期失败: ${error instanceof Error ? error.message : 'Unknown error'}`));
     }
   });
 
   // Extract subject visit items
   ipcMain.handle('ai:extractSubjectVisitItems', async (event, fileId: string, content: string, visitType: string): Promise<Result<any>> => {
+    const keyResult = requireApiKey();
+    if (!keyResult.success) return keyResult;
     try {
-      const settings = getSettings();
-      if (!settings.apiKey) {
-        return {
-          success: false,
-          error: createAppError(ErrorCode.API_KEY_MISSING, '请先配置 API Key'),
-        };
-      }
-
-      const service = getGLMService({ apiKey: settings.apiKey });
+      const service = getGLMService({ apiKey: keyResult.data.apiKey });
       return await service.extractSubjectVisitItems(fileId, content, visitType);
     } catch (error) {
-      return {
-        success: false,
-        error: createAppError(
-          ErrorCode.AI_API_ERROR,
-          `提取访视项目失败: ${error instanceof Error ? error.message : 'Unknown error'}`
-        ),
-      };
+      return err(createAppError(ErrorCode.AI_API_ERROR, `提取访视项目失败: ${error instanceof Error ? error.message : 'Unknown error'}`));
     }
   });
 
   // Extract from image
   ipcMain.handle('ai:extractFromImage', async (event, imagePath: string, prompt: string): Promise<Result<any>> => {
+    const keyResult = requireApiKey();
+    if (!keyResult.success) return keyResult;
     try {
-      const settings = getSettings();
-      if (!settings.apiKey) {
-        return {
-          success: false,
-          error: createAppError(ErrorCode.API_KEY_MISSING, '请先配置 API Key'),
-        };
-      }
-
-      const service = getGLMService({ apiKey: settings.apiKey });
+      const service = getGLMService({ apiKey: keyResult.data.apiKey });
       return await service.extractFromImage(imagePath, prompt);
     } catch (error) {
-      return {
-        success: false,
-        error: createAppError(
-          ErrorCode.AI_API_ERROR,
-          `图片识别失败: ${error instanceof Error ? error.message : 'Unknown error'}`
-        ),
-      };
+      return err(createAppError(ErrorCode.AI_API_ERROR, `图片识别失败: ${error instanceof Error ? error.message : 'Unknown error'}`));
     }
   });
 
   // Process protocol file - extract both criteria and visit schedule
   ipcMain.handle('ai:processProtocolFile', async (event, fileId: string, filePath: string): Promise<Result<any>> => {
+    const keyResult = requireApiKey();
+    if (!keyResult.success) return keyResult;
+    const settings = keyResult.data;
     try {
-      const settings = getSettings();
-      if (!settings.apiKey) {
-        return {
-          success: false,
-          error: createAppError(ErrorCode.API_KEY_MISSING, '请先配置 API Key'),
-        };
-      }
 
-      // Read PDF content (now handles both text and scanned)
+    // Read PDF content (now handles both text and scanned)
       const pdfResult = await readPDFContent(filePath);
 
       let combinedText = '';
@@ -574,15 +492,10 @@ export function registerAIHandlers(): void {
 
   // Process subject file - extract subject data
   ipcMain.handle('ai:processSubjectFile', async (event, fileId: string, filePath: string): Promise<Result<any>> => {
+    const keyResult = requireApiKey();
+    if (!keyResult.success) return keyResult;
+    const settings = keyResult.data;
     try {
-      const settings = getSettings();
-      if (!settings.apiKey) {
-        return {
-          success: false,
-          error: createAppError(ErrorCode.API_KEY_MISSING, '请先配置 API Key'),
-        };
-      }
-
       // Read file content (PDF or image)
       let content: string;
       let imagePaths: string[] | undefined;
@@ -704,24 +617,37 @@ export function registerAIHandlers(): void {
             };
           }
 
-          // Small scanned PDF (≤10 pages) — original behavior, but use ALL pages
-          const service = getGLMService({
+          // Small scanned PDF (≤10 pages) — use ALL pages, extract both subject data and OCR text
+          const visionService = getGLMService({
             apiKey: settings.apiKey,
             modelName: 'glm-4.6v-flash'
           });
 
           const allSubjectData: any[] = [];
           const allImagePaths = pdfResult.imagePaths || [];
+          const textParts: string[] = [];
 
-          // Extract subject data from ALL pages
+          // Extract subject data AND OCR text from ALL pages in a single pass
           for (const imagePath of allImagePaths) {
             try {
-              const subjectResult = await service.extractSubjectDataFromImage(imagePath);
+              const subjectResult = await visionService.extractSubjectDataFromImage(imagePath);
               if (subjectResult.success) {
                 allSubjectData.push(subjectResult.data);
               }
             } catch (e) {
-              console.error('[AI Handler] Failed to extract from page:', e);
+              console.error('[AI Handler] Failed to extract subject data from page:', e);
+            }
+
+            try {
+              const ocrResult = await visionService.extractFromImage(
+                imagePath,
+                '请提取图片中的所有文字内容，包括标题、正文、表格等所有可见文字。'
+              );
+              if (ocrResult.success && ocrResult.data.text) {
+                textParts.push(ocrResult.data.text);
+              }
+            } catch (e) {
+              console.error('[AI Handler] OCR failed for page:', e);
             }
           }
 
@@ -730,57 +656,26 @@ export function registerAIHandlers(): void {
             ? ResultMerger.mergeSubjectData(allSubjectData)
             : {};
 
-          // Cleanup temporary images
+          // Cleanup temporary images (single cleanup, no re-conversion needed)
           await pdfProcessor.cleanupImages(allImagePaths);
-
-          // Clear cache after cleanup to prevent stale file references
           clearPDFContentCache(filePath);
 
-          // Extract visit dates and medications via OCR text if we have vision data
+          // Extract visit dates and medications from OCR text
           let visitDates: any = { visits: [] };
           let medications: any[] = [];
 
-          if (allSubjectData.length > 0) {
-            // Try to get OCR text for visit dates and medications
-            const ocrService = getGLMService({ apiKey: settings.apiKey, modelName: settings.modelName });
-            const textParts: string[] = [];
+          const fullText = textParts.join('\n\n');
+          if (fullText.length > 10) {
+            const textService = getGLMService({ apiKey: settings.apiKey, modelName: settings.modelName });
 
-            // Re-convert and OCR for text extraction (small PDF, only do once)
-            const reconvertResult = await pdfProcessor.convertPDFToImages(filePath);
-            if (reconvertResult.success) {
-              const visionService = getGLMService({
-                apiKey: settings.apiKey,
-                modelName: 'glm-4.6v-flash'
-              });
-
-              for (const imagePath of reconvertResult.data) {
-                try {
-                  const result = await visionService.extractFromImage(
-                    imagePath,
-                    '请提取图片中的所有文字内容，包括标题、正文、表格等所有可见文字。'
-                  );
-                  if (result.success && result.data.text) {
-                    textParts.push(result.data.text);
-                  }
-                } catch (e) {
-                  console.error('[AI Handler] OCR failed:', e);
-                }
-              }
-
-              await pdfProcessor.cleanupImages(reconvertResult.data);
+            const visitResult = await textService.extractSubjectVisitDates(fileId, fullText);
+            if (visitResult.success) {
+              visitDates = visitResult.data;
             }
 
-            const fullText = textParts.join('\n\n');
-            if (fullText.length > 10) {
-              const visitResult = await ocrService.extractSubjectVisitDates(fileId, fullText);
-              if (visitResult.success) {
-                visitDates = visitResult.data;
-              }
-
-              const medResult = await ocrService.recognizeMedications(fileId, fullText);
-              if (medResult.success) {
-                medications = medResult.data;
-              }
+            const medResult = await textService.recognizeMedications(fileId, fullText);
+            if (medResult.success) {
+              medications = medResult.data;
             }
           }
 
@@ -857,36 +752,23 @@ export function registerAIHandlers(): void {
 
   // Analyze subject eligibility against criteria
   ipcMain.handle('ai:analyzeEligibility', async (event, subjectFilePaths: string[], inclusionCriteria: any[], exclusionCriteria: any[]): Promise<Result<any>> => {
+    // Validate file paths
+    if (!subjectFilePaths || !Array.isArray(subjectFilePaths) || subjectFilePaths.length === 0) {
+      return err(createAppError(ErrorCode.VALIDATION_ERROR, '受试者文件路径不能为空'));
+    }
+
+    const keyResult = requireApiKey();
+    if (!keyResult.success) return keyResult;
+    const settings = keyResult.data;
+
     try {
-      // Validate file paths
-      if (!subjectFilePaths || !Array.isArray(subjectFilePaths) || subjectFilePaths.length === 0) {
-        return {
-          success: false,
-          error: createAppError(ErrorCode.VALIDATION_ERROR, '受试者文件路径不能为空'),
-        };
-      }
-
-      const settings = getSettings();
-      if (!settings.apiKey) {
-        return {
-          success: false,
-          error: createAppError(ErrorCode.API_KEY_MISSING, '请先配置 API Key'),
-        };
-      }
-
       // Validate criteria arrays
       if (!inclusionCriteria || !Array.isArray(inclusionCriteria)) {
-        return {
-          success: false,
-          error: createAppError(ErrorCode.AI_INVALID_RESPONSE, '入选标准数据无效'),
-        };
+        return err(createAppError(ErrorCode.AI_INVALID_RESPONSE, '入选标准数据无效'));
       }
 
       if (!exclusionCriteria || !Array.isArray(exclusionCriteria)) {
-        return {
-          success: false,
-          error: createAppError(ErrorCode.AI_INVALID_RESPONSE, '排除标准数据无效'),
-        };
+        return err(createAppError(ErrorCode.AI_INVALID_RESPONSE, '排除标准数据无效'));
       }
 
       // Create ID maps for inclusion and exclusion criteria

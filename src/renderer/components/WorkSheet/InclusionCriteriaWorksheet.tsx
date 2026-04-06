@@ -11,15 +11,12 @@ import { generateId } from '@shared/types/worksheet';
 export const InclusionCriteriaWorksheet: React.FC = () => {
   const inclusionCriteria = useInclusionCriteria();
   const subjectFiles = useSubjectFiles();
-  const {
-    addInclusionCriteria,
-    updateInclusionCriteria,
-    removeInclusionCriteria,
-    setInclusionCriteria,
-    updateInclusionEligibility,
-    updateInclusionFileResults,
-    clearInclusionEligibility
-  } = useStore();
+  const addInclusionCriteria = useStore(s => s.addInclusionCriteria);
+  const updateInclusionCriteria = useStore(s => s.updateInclusionCriteria);
+  const removeInclusionCriteria = useStore(s => s.removeInclusionCriteria);
+  const updateInclusionEligibility = useStore(s => s.updateInclusionEligibility);
+  const updateInclusionFileResults = useStore(s => s.updateInclusionFileResults);
+  const clearInclusionEligibility = useStore(s => s.clearInclusionEligibility);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<{ category: string; description: string }>({

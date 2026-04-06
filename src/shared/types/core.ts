@@ -141,6 +141,7 @@ export type IPCChannel =
   | 'file:getById'
   // AI operations
   | 'ai:testConnection'
+  | 'ai:testGLM4V'
   | 'ai:extractCriteria'
   | 'ai:extractVisitSchedule'
   | 'ai:recognizeMedications'
@@ -148,6 +149,9 @@ export type IPCChannel =
   | 'ai:extractSubjectVisitDates'
   | 'ai:extractSubjectVisitItems'
   | 'ai:extractFromImage'
+  | 'ai:processProtocolFile'
+  | 'ai:processSubjectFile'
+  | 'ai:analyzeEligibility'
   // Excel operations
   | 'excel:exportTracker'
   // Settings operations
@@ -157,6 +161,7 @@ export type IPCChannel =
   // System operations
   | 'system:getVersion'
   | 'system:openExternal'
+  | 'system:getAppPath'
   // Dialog operations
   | 'dialog:openFile'
   | 'dialog:saveFile';
@@ -171,6 +176,7 @@ export type IPCRequestPayload = {
   'file:getAll': { zone: StorageZone };
   'file:getById': { zone: StorageZone; fileId: string };
   'ai:testConnection': { apiKey: string };
+  'ai:testGLM4V': { apiKey: string };
   'ai:extractCriteria': { fileId: string; pdfContent: string };
   'ai:extractVisitSchedule': { fileId: string; pdfContent: string };
   'ai:recognizeMedications': { fileId: string; content: string };
@@ -178,17 +184,19 @@ export type IPCRequestPayload = {
   'ai:extractSubjectVisitDates': { fileId: string; content: string };
   'ai:extractSubjectVisitItems': { fileId: string; content: string; visitType: string };
   'ai:extractFromImage': { imagePath: string; prompt: string };
+  'ai:processProtocolFile': { fileId: string; filePath: string };
+  'ai:processSubjectFile': { fileId: string; filePath: string };
+  'ai:analyzeEligibility': { subjectFilePaths: string[]; inclusionCriteria: InclusionCriteria[]; exclusionCriteria: ExclusionCriteria[] };
   'excel:exportTracker': { data: ExcelExportData; options: ExcelExportOptions };
   'settings:get': undefined;
   'settings:set': { settings: Partial<AppSettings> };
   'settings:reset': undefined;
   'system:getVersion': undefined;
   'system:openExternal': { url: string };
+  'system:getAppPath': { name: 'home' | 'appData' | 'userData' | 'temp' | 'downloads' };
   'dialog:openFile': { filters: FileFilter[] };
   'dialog:saveFile': { defaultPath: string; filters: FileFilter[] };
-};
-
-export type IPCResponsePayload<T extends IPCChannel> = Result<any, AppError>;
+};export type IPCResponsePayload<T extends IPCChannel> = Result<any, AppError>;
 
 // ============================================================================
 // Settings Types
@@ -215,7 +223,7 @@ export interface AppSettings {
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  apiKey: '07b90939b67f4170bc77dc79038bff91.DAZoHzF7duEhH3NM', // 智谱 AI 默认 API Key
+  apiKey: '', // 用户需自行配置 API Key
   apiEndpoint: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
   modelName: 'glm-4',
   storagePath: '',

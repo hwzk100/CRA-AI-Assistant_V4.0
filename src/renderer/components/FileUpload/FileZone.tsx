@@ -23,23 +23,22 @@ export const FileZone: React.FC<FileZoneProps> = ({
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const { addFile, updateFileStatus, setProtocolFiles, setSubjectFiles, removeFile, setProcessing } = useStore();
 
-  // Listen for AI processing progress events
-  useEffect(() => {
-    if (!window.electronAPI?.onProgress) return;
-    const cleanup = window.electronAPI.onProgress((progress) => {
-      const percent = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
-      setProcessing(true, 'processing', percent);
-    });
-    return cleanup;
-  }, [setProcessing]);
+  // Subscribe to both file lists and select in render
+  const protocolFiles = useStore((state) => state.protocolFiles);
+  const subjectFiles = useStore((state) => state.subjectFiles);
+  const files = zone === StorageZone.PROTOCOL ? protocolFiles : subjectFiles;
 
-  const files = zone === StorageZone.PROTOCOL
-    ? useStore((state) => state.protocolFiles)
-    : useStore((state) => state.subjectFiles);
-
-  // Clear all files handler
+  // Subscribe to store actions
+  const addFile = useStore((state) => state.addFile);
+  const updateFileStatus = useStore((state) => state.updateFileStatus);
+  const setProtocolFiles = useStore((state) => state.setProtocolFiles);
+  const setSubjectFiles = useStore((state) => state.setSubjectFiles);
+  const removeFile = useStore((state) => state.removeFile);
+  const setProcessing = useStore((state) => state.setProcessing);
+  // Computed values
+  const pendingCount = files.filter(f => f.status === FileStatus.PENDING || f.status === FileStatus.FAILED).length;
+  const globalIsProcessing = useStore((state) => state.isProcessing);  // Clear all files handler
   const handleClearAll = () => {
     if (files.length === 0) return;
 
@@ -261,10 +260,6 @@ export const FileZone: React.FC<FileZoneProps> = ({
       fileInputRef.current.value = '';
     }
   }, [zone]);
-
-  // Computed values
-  const pendingCount = files.filter(f => f.status === FileStatus.PENDING || f.status === FileStatus.FAILED).length;
-  const globalIsProcessing = useStore((state) => state.isProcessing);
 
   // 自动运行资格分析（入选/排除标准 vs 受试者文件）
   const runEligibilityAnalysis = async () => {

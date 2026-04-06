@@ -429,6 +429,24 @@ const useAppStore = create<AppStore>()(
       }),
       onRehydrateStorage: () => (state) => {
         if (state) {
+          // Rehydrate Date objects from serialized strings
+          const reviveDates = <T extends { createdAt?: unknown; updatedAt?: unknown }>(
+            items: T[]
+          ): T[] => {
+            return items.map(item => ({
+              ...item,
+              createdAt: item.createdAt instanceof Date ? item.createdAt : new Date(item.createdAt as string),
+              updatedAt: item.updatedAt instanceof Date ? item.updatedAt : new Date(item.updatedAt as string),
+            }));
+          };
+
+          state.inclusionCriteria = reviveDates(state.inclusionCriteria);
+          state.exclusionCriteria = reviveDates(state.exclusionCriteria);
+          state.visitSchedule = reviveDates(state.visitSchedule);
+          state.subjectVisits = reviveDates(state.subjectVisits);
+          state.medications = reviveDates(state.medications);
+
+          // Auto-clear eligibility data on startup (stale results)
           const hasInclusionEligibility = state.inclusionCriteria.some(c => c.eligible !== undefined || c.fileResults !== undefined);
           const hasExclusionEligibility = state.exclusionCriteria.some(c => c.eligible !== undefined || c.fileResults !== undefined);
 
